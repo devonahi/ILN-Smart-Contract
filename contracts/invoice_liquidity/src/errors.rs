@@ -19,4 +19,7 @@ pub enum ContractError {
     BatchTooLarge = 14,
     AlreadyCancelled = 15,
     AlreadyInitialized = 16,
+    ContractPaused = 17,
+    DueDateTooSoon = 18,
+    DueDateTooFar = 19,
 }

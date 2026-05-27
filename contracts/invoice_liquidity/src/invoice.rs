@@ -176,10 +176,39 @@ pub fn next_invoice_id(env: &Env) -> u64 {
 
 /// Get a payer's reputation score (0-100, default 50)
 pub fn get_payer_score(env: &Env, payer: &Address) -> u32 {
-    env.storage()
+    match env.storage()
         .persistent()
-        .get(&StorageKey::PayerScore(payer.clone()))
-        .unwrap_or(50)
+        .get::<StorageKey, ReputationScore>(&StorageKey::PayerScore(payer.clone()))
+    {
+        Some(mut rep) => {
+            // Apply decay if enough ledgers have passed and config exists
+            if let Ok(decay_config) = crate::config::get_config(env) {
+                let current_ledger = env.ledger().sequence();
+                let ledgers_since_activity = current_ledger.saturating_sub(rep.last_activity_ledger);
+                
+                if ledgers_since_activity >= decay_config.decay_period_ledgers 
+                    && decay_config.decay_period_ledgers > 0 
+                    && decay_config.decay_rate_bps > 0 
+                {
+                    // Calculate number of decay periods that have passed
+                    let periods_passed = ledgers_since_activity / decay_config.decay_period_ledgers;
+                    
+                    // Apply decay: score = score * (1 - decay_rate/10000)^periods
+                    let mut decayed_score = rep.score as u64;
+                    for _ in 0..periods_passed {
+                        // Decay: subtract decay_rate_bps basis points
+                        let decay_amount = (decayed_score * decay_config.decay_rate_bps as u64) / 10_000;
+                        decayed_score = decayed_score.saturating_sub(decay_amount);
+                    }
+                    
+                    rep.score = (decayed_score.min(100)) as u32;
+                }
+            }
+            
+            rep.score
+        }
+        None => 50  // Default neutral score for new users
+    }
 }
 
 /// Update a payer's reputation score (capped at 100)
@@ -187,7 +216,7 @@ pub fn set_payer_score(env: &Env, payer: &Address, score: u32) {
     let score = score.min(100);
     env.storage()
         .persistent()
-        .set(&StorageKey::PayerScore(payer.clone()), &score);
+        .set(&StorageKey::PayerScore(payer.clone()), &rep);
 }
 
 // ----------------------------------------------------------------

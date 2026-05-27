@@ -119,3 +119,15 @@ pub struct AdminChanged {
     /// Ledger timestamp of the change.
     pub timestamp: u64,
 }
+
+#[contractevent(topics = ["paused"])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractPaused {
+    pub timestamp: u64,
+}
+
+#[contractevent(topics = ["unpaused"])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ContractUnpaused {
+    pub timestamp: u64,
+}

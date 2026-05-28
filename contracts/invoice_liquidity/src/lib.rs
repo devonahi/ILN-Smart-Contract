@@ -12,6 +12,7 @@ mod tests_regression;
 mod tests_new_features;
 mod tests_pagination;
 mod tests_lp_pagination;
+mod tests_xlm_support;
 
 pub use errors::ContractError;
 pub use crate::invoice::{Invoice, InvoiceParams, InvoiceStatus, ReputationScore, AppealRecord, LpFundRequest};
@@ -79,6 +80,18 @@ impl InvoiceLiquidityContract {
         env.storage()
             .instance()
             .set(&crate::storage::DataKey::MaxDiscountRate, &5000_u32);
+
+        // Initialize config with XLM SAC address
+        let initial_config = crate::config::Config {
+            high_rep_threshold: 70,
+            bonus_bps: 100,
+            min_discount_rate_bps: 100,
+            decay_rate_bps: 50,
+            decay_period_ledgers: 10000,
+            dispute_timeout_ledgers: 10000,
+            xlm_sac_address: xlm_token.clone(),
+        };
+        crate::storage::set_config(&env, &initial_config);
 
         // approve first token (USDC or default)
         env.storage()
@@ -687,11 +700,18 @@ impl InvoiceLiquidityContract {
         let token = token_client(&env, &invoice.token);
         let contract_address = env.current_contract_address();
 
-        let fund_discount = fund_amount
+        // Handle XLM precision if needed (SAC wrapper handles conversion internally)
+        let normalized_fund_amount = if is_xlm_token(&env, &invoice.token) {
+            normalize_xlm_amount(fund_amount)
+        } else {
+            normalize_usdc_amount(fund_amount)
+        };
+
+        let fund_discount = normalized_fund_amount
             .checked_mul(discount_rate_as_i128(invoice.discount_rate))
             .unwrap_or(0)
             / 10_000;
-        let cost = fund_amount - fund_discount;
+        let cost = normalized_fund_amount - fund_discount;
 
         token.transfer(&funder, &contract_address, &cost);
 
@@ -996,8 +1016,15 @@ impl InvoiceLiquidityContract {
         let token = token_client(&env, &invoice.token);
         let contract_address = env.current_contract_address();
 
+        // Handle XLM precision if needed (SAC wrapper handles conversion internally)
+        let normalized_amount = if is_xlm_token(&env, &invoice.token) {
+            normalize_xlm_amount(amount)
+        } else {
+            normalize_usdc_amount(amount)
+        };
+
         // Payer sends partial/full amount to the contract
-        token.transfer(&invoice.payer, &contract_address, &amount);
+        token.transfer(&invoice.payer, &contract_address, &normalized_amount);
 
         invoice.amount_paid += amount;
 
@@ -1633,6 +1660,39 @@ fn token_client<'a>(env: &'a Env, token: &Address) -> TokenClient<'a> {
 
 fn discount_rate_as_i128(rate: u32) -> i128 {
     rate as i128
+}
+
+// ----------------------------------------------------------------
+// XLM PRECISION HANDLING
+// ----------------------------------------------------------------
+// XLM has 7 decimal places (1 XLM = 10,000,000 stroops)
+// USDC has 6 decimal places (1 USDC = 1,000,000 units)
+// These helpers ensure correct precision handling
+
+const XLM_DECIMALS: u32 = 7;
+const USDC_DECIMALS: u32 = 6;
+
+/// Check if a token address is the XLM SAC address
+fn is_xlm_token(env: &Env, token: &Address) -> bool {
+    if let Some(config) = crate::storage::get_config(env) {
+        token == &config.xlm_sac_address
+    } else {
+        false
+    }
+}
+
+/// Convert amount from XLM precision (7 decimals) to contract precision
+/// This is a no-op for now since we store amounts in their native token precision,
+/// but provides a hook for future precision normalization if needed
+fn normalize_xlm_amount(amount: i128) -> i128 {
+    amount
+}
+
+/// Convert amount from USDC precision (6 decimals) to contract precision
+/// This is a no-op for now since we store amounts in their native token precision,
+/// but provides a hook for future precision normalization if needed
+fn normalize_usdc_amount(amount: i128) -> i128 {
+    amount
 }
 
 fn validate_invoice_terms(

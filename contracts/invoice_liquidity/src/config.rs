@@ -10,6 +10,7 @@ pub struct Config {
     pub decay_rate_bps: u32,           // Basis points to decay per period (e.g., 50 = 0.5%)
     pub decay_period_ledgers: u64,     // Ledger count between decay applications
     pub dispute_timeout_ledgers: u64,  // Ledger count after which a dispute can be auto-resolved
+    pub xlm_sac_address: Address,      // Stellar Asset Contract address for native XLM wrapper
 }
 
 
@@ -34,6 +35,7 @@ pub fn update_config(
     decay_rate_bps: u32,
     decay_period_ledgers: u64,
     dispute_timeout_ledgers: u64,
+    xlm_sac_address: Address,
 ) -> Result<(), ConfigError> {
     let admin = crate::storage::get_admin(env).ok_or(ConfigError::Unauthorized)?;
     caller.require_auth();
@@ -55,6 +57,7 @@ pub fn update_config(
         decay_rate_bps,
         decay_period_ledgers,
         dispute_timeout_ledgers,
+        xlm_sac_address,
     };
 
     crate::storage::set_config(env, &new_config);

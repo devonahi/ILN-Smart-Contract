@@ -373,6 +373,7 @@ impl InvoiceLiquidityContract {
             funder: None,
             funded_at: None,
             amount_funded: 0,
+            amount_paid: 0,
             submitter_reputation_at_submission,
         };
 
@@ -511,6 +512,7 @@ impl InvoiceLiquidityContract {
                 funder: None,
                 funded_at: None,
                 amount_funded: 0,
+                amount_paid: 0,
                 submitter_reputation_at_submission,
             };
 
@@ -1582,6 +1584,7 @@ impl InvoiceLiquidityContract {
         decay_rate_bps: u32,
         decay_period_ledgers: u64,
         dispute_timeout_ledgers: u64,
+        xlm_sac_address: Address,
     ) -> Result<(), ContractError> {
         crate::config::update_config(
             &env,
@@ -1592,6 +1595,7 @@ impl InvoiceLiquidityContract {
             decay_rate_bps,
             decay_period_ledgers,
             dispute_timeout_ledgers,
+            xlm_sac_address,
         )
         .map_err(|_| ContractError::Unauthorized)
     }

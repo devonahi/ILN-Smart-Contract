@@ -41,4 +41,6 @@ pub enum ContractError {
     DueDateTooFar = 28,
     SelfInvoice = 29,
     OverpaymentRejected = 30,
+    /// Invoice amount is below the configurable minimum threshold.
+    AmountTooSmall = 31,
 }

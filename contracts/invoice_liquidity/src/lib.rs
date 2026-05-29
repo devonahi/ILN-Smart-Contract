@@ -13,6 +13,7 @@ mod tests_new_features;
 mod tests_pagination;
 mod tests_lp_pagination;
 mod tests_xlm_support;
+mod tests_min_invoice_amount;
 
 pub use errors::ContractError;
 pub use crate::invoice::{Invoice, InvoiceParams, InvoiceStatus, ReputationScore, AppealRecord, LpFundRequest};
@@ -51,6 +52,9 @@ const MIN_INVOICE_DURATION: u64 = 24 * 60 * 60;
 
 /// Maximum invoice duration: 365 days (in seconds)
 const MAX_INVOICE_DURATION: u64 = 365 * 24 * 60 * 60;
+
+/// Minimum invoice amount (in token's smallest unit). Default: 1_000_000 (1 USDC-equivalent)
+const MIN_INVOICE_AMOUNT: i128 = 1_000_000;
 
 // ----------------------------------------------------------------
 // CONTRACT
@@ -1701,8 +1705,8 @@ fn validate_invoice_terms(
     due_date: u64,
     discount_rate: u32,
 ) -> Result<(), ContractError> {
-    if amount < 1_000_000 {
-        return Err(ContractError::InvalidAmount);
+    if amount < MIN_INVOICE_AMOUNT {
+        return Err(ContractError::AmountTooSmall);
     }
 
     let max_rate: u32 = env

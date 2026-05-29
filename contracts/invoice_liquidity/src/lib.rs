@@ -29,7 +29,9 @@ use events::{
     DefaultAppealed, DisputeResolved, FundQueueResolved, FundRequested, InvoiceCancelled,
     InvoiceDefaulted, InvoiceDisputed, InvoiceFunded, InvoicePaid, InvoiceSubmitted,
     InvoiceTransferred, InvoiceUpdated,
+    InvoicePartiallyPaid,
 };
+use crate::storage::get_admin;
 use invoice::{
     add_invoice_to_lp, add_invoice_to_submitter, add_volume, get_appeal, get_contract_stats,
     get_dispute, get_fund_queue, get_invoice_funders, get_lp_invoices, get_lp_score, get_payer_score,
@@ -359,7 +361,7 @@ impl InvoiceLiquidityContract {
         let id = next_invoice_id(&env);
 
         // Capture the freelancer's reputation score at submission time
-        let submitter_reputation_at_submission = get_payer_score(&env, &freelancer);
+        let submitter_rep = get_payer_score(&env, &freelancer);
 
         let invoice = Invoice {
             id,
@@ -374,7 +376,7 @@ impl InvoiceLiquidityContract {
             funded_at: None,
             amount_funded: 0,
             amount_paid: 0,
-            submitter_reputation_at_submission,
+            submitter_rep,
         };
 
         save_invoice(&env, &invoice);
@@ -498,7 +500,7 @@ impl InvoiceLiquidityContract {
             let id = next_invoice_id(&env);
 
             // Capture the freelancer's reputation score at submission time
-            let submitter_reputation_at_submission = get_payer_score(&env, &params.freelancer);
+            let submitter_rep = get_payer_score(&env, &params.freelancer);
 
             let invoice = Invoice {
                 id,
@@ -513,7 +515,7 @@ impl InvoiceLiquidityContract {
                 funded_at: None,
                 amount_funded: 0,
                 amount_paid: 0,
-                submitter_reputation_at_submission,
+                submitter_rep,
             };
 
             save_invoice(&env, &invoice);
@@ -785,13 +787,15 @@ impl InvoiceLiquidityContract {
         } else {
             invoice.token.clone()
         };
-        let eurc_addr = if token_list.len() > 1 {
-            token_list.get(1).unwrap()
+        // token_list layout: [usdc, xlm, eurc?]. Choose indices defensively.
+        let eurc_addr = if token_list.len() > 2 {
+            token_list.get(2).unwrap()
         } else {
             invoice.token.clone()
         };
-        let xlm_addr = if token_list.len() > 2 {
-            token_list.get(2).unwrap()
+        // initialize() pushes token then xlm_token, so xlm is at index 1 when present
+        let xlm_addr = if token_list.len() > 1 {
+            token_list.get(1).unwrap()
         } else {
             invoice.token.clone()
         };
@@ -1709,6 +1713,10 @@ fn validate_invoice_terms(
     due_date: u64,
     discount_rate: u32,
 ) -> Result<(), ContractError> {
+    if amount <= 0 {
+        return Err(ContractError::InvalidAmount);
+    }
+
     if amount < MIN_INVOICE_AMOUNT {
         return Err(ContractError::AmountTooSmall);
     }

@@ -37,7 +37,7 @@ pub struct Invoice {
     pub funded_at: Option<u64>,  // ledger timestamp when funding occurred
     pub amount_funded: i128,     // cumulative amount funded so far
     pub amount_paid: i128,       // cumulative amount paid by payer so far
-    pub submitter_reputation_at_submission: u32, // snapshot of freelancer's reputation at submission time
+    pub submitter_rep: u32, // snapshot of freelancer's reputation at submission time
 }
 
 
@@ -504,15 +504,6 @@ pub fn add_volume(env: &Env, token: &Address, amount: i128, usdc_addr: &Address,
         env.storage()
             .persistent()
             .set(&StorageKey::TotalVolumeUsdc, &(current + amount));
-    } else if token == eurc_addr {
-        let current: i128 = env
-            .storage()
-            .persistent()
-            .get(&StorageKey::TotalVolumeEurc)
-            .unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&StorageKey::TotalVolumeEurc, &(current + amount));
     } else if token == xlm_addr {
         let current: i128 = env
             .storage()
@@ -522,6 +513,15 @@ pub fn add_volume(env: &Env, token: &Address, amount: i128, usdc_addr: &Address,
         env.storage()
             .persistent()
             .set(&StorageKey::TotalVolumeXlm, &(current + amount));
+    } else if token == eurc_addr {
+        let current: i128 = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::TotalVolumeEurc)
+            .unwrap_or(0);
+        env.storage()
+            .persistent()
+            .set(&StorageKey::TotalVolumeEurc, &(current + amount));
     }
 }
 

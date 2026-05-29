@@ -243,11 +243,11 @@ pub fn add_volume(env: &Env, token: &Address, amount: i128, usdc_addr: &Address,
     if token == usdc_addr {
         let current: i128 = env.storage().persistent().get(&DataKey::TotalVolumeUsdc).unwrap_or(0);
         env.storage().persistent().set(&DataKey::TotalVolumeUsdc, &(current + amount));
-    } else if token == eurc_addr {
-        let current: i128 = env.storage().persistent().get(&DataKey::TotalVolumeEurc).unwrap_or(0);
-        env.storage().persistent().set(&DataKey::TotalVolumeEurc, &(current + amount));
     } else if token == xlm_addr {
         let current: i128 = env.storage().persistent().get(&DataKey::TotalVolumeXlm).unwrap_or(0);
         env.storage().persistent().set(&DataKey::TotalVolumeXlm, &(current + amount));
+    } else if token == eurc_addr {
+        let current: i128 = env.storage().persistent().get(&DataKey::TotalVolumeEurc).unwrap_or(0);
+        env.storage().persistent().set(&DataKey::TotalVolumeEurc, &(current + amount));
     }
 }

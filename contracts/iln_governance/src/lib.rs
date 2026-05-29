@@ -107,6 +107,33 @@ pub struct GovernanceProposal {
 }
 
 // ================================================================
+// Issue #70: ProposalCreated / ProposalExecuted events
+// ================================================================
+
+#[contractevent(topics = ["proposal_created"])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProposalCreated {
+    #[topic]
+    pub proposal_id: u64,
+    pub proposer: Address,
+    pub action_type: ProposalAction,
+    pub proposed_value: i128,
+    pub created_at: u64,
+    pub voting_end: u64,
+}
+
+#[contractevent(topics = ["proposal_executed"])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProposalExecuted {
+    #[topic]
+    pub proposal_id: u64,
+    pub action_type: ProposalAction,
+    pub proposed_value: i128,
+    pub votes_for: i128,
+    pub votes_against: i128,
+}
+
+// ================================================================
 // Issue #61: VoteCast event
 // ================================================================
 
@@ -225,6 +252,15 @@ impl GovContract {
         env.storage()
             .instance()
             .set(&StorageKey::ProposalCount, &id);
+
+        env.events().publish_event(&ProposalCreated {
+            proposal_id: id,
+            proposer,
+            action_type: proposal.action_type.clone(),
+            proposed_value,
+            created_at: now,
+            voting_end,
+        });
 
         Ok(id)
     }
@@ -391,6 +427,14 @@ impl GovContract {
             .persistent()
             .set(&StorageKey::Proposal(proposal_id), &proposal);
 
+        env.events().publish_event(&ProposalExecuted {
+            proposal_id,
+            action_type: proposal.action_type,
+            proposed_value: proposal.proposed_value,
+            votes_for: proposal.votes_for,
+            votes_against: proposal.votes_against,
+        });
+
         Ok(())
     }
 
@@ -414,3 +458,7 @@ impl GovContract {
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+#[path = "../../tests/governance_lifecycle_test.rs"]
+mod governance_lifecycle_test;

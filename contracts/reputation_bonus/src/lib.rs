@@ -3,10 +3,14 @@
 pub mod config;
 pub mod invoice;
 pub mod rate_logic;
+pub mod reputation;
+pub mod errors;
 
 use soroban_sdk::{contract, contractimpl, Address, Env};
-use crate::config::{Config, ConfigError, update_config, get_config, set_config, set_admin};
-use crate::invoice::{Invoice, InvoiceError, submit_invoice, set_reputation, get_reputation};
+use crate::config::{Config, update_config, get_config, set_config, set_admin};
+use crate::invoice::{Invoice, submit_invoice, mark_paid, handle_default};
+use crate::reputation::{read_reputation, ReputationScore};
+use crate::errors::ContractError;
 
 #[contract]
 pub struct ReputationBonusContract;
@@ -17,12 +21,12 @@ impl ReputationBonusContract {
         set_admin(&env, &admin);
     }
 
-    pub fn set_config(env: Env, config: Config) -> Result<(), ConfigError> {
-        set_config(&env, &config)
+    pub fn set_config(env: Env, config: Config) -> Result<(), ContractError> {
+        set_config(&env, &config).map_err(|_| ContractError::ConfigErrorUnauthorized)
     }
 
-    pub fn get_config(env: Env) -> Result<Config, ConfigError> {
-        get_config(&env)
+    pub fn get_config(env: Env) -> Result<Config, ContractError> {
+        get_config(&env).map_err(|_| ContractError::ConfigErrorUnauthorized)
     }
 
     pub fn update_config(
@@ -31,16 +35,13 @@ impl ReputationBonusContract {
         high_rep_threshold: u32,
         bonus_bps: u32,
         min_discount_rate_bps: u32,
-    ) -> Result<(), ConfigError> {
+    ) -> Result<(), ContractError> {
         update_config(&env, &caller, high_rep_threshold, bonus_bps, min_discount_rate_bps)
+            .map_err(|_| ContractError::ConfigErrorUnauthorized)
     }
 
-    pub fn set_reputation(env: Env, address: Address, score: u32) {
-        set_reputation(&env, &address, score);
-    }
-
-    pub fn get_reputation(env: Env, address: Address) -> u32 {
-        get_reputation(&env, &address)
+    pub fn get_reputation(env: Env, address: Address) -> ReputationScore {
+        read_reputation(&env, &address)
     }
 
     pub fn submit_invoice(
@@ -50,7 +51,15 @@ impl ReputationBonusContract {
         amount: i128,
         due_date: u64,
         base_discount_rate_bps: u32,
-    ) -> Result<Invoice, InvoiceError> {
+    ) -> Result<Invoice, ContractError> {
         submit_invoice(&env, &freelancer, &payer, amount, due_date, base_discount_rate_bps)
+    }
+
+    pub fn mark_paid(env: Env, invoice_id: u64) -> Result<(), ContractError> {
+        mark_paid(&env, invoice_id)
+    }
+
+    pub fn handle_default(env: Env, invoice_id: u64) -> Result<(), ContractError> {
+        handle_default(&env, invoice_id)
     }
 }

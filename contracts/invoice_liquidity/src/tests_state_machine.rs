@@ -106,7 +106,7 @@ fn submit_invoice(t: &TestEnv) -> u64 {
 fn advance_past_due_date(t: &TestEnv, invoice_id: u64) {
     let invoice = t.contract.get_invoice(&invoice_id);
     let mut ledger_info = t.env.ledger().get();
-    ledger_info.timestamp = invoice.due_date + 1;
+    ledger_info.timestamp = invoice.due_date as u64 + 1;
     t.env.ledger().set(ledger_info);
 }
 
@@ -484,7 +484,7 @@ fn test_pending_to_funded_full_funding() {
     assert_eq!(invoice_after.amount_funded, INVOICE_AMOUNT);
     assert_eq!(invoice_after.funder, Some(t.funder.clone()));
     assert!(invoice_after.funded_at.is_some());
-    assert_eq!(invoice_after.funded_at.unwrap(), t.env.ledger().timestamp());
+    assert_eq!(invoice_after.funded_at.unwrap() as u64, t.env.ledger().timestamp());
 }
 
 // ----------------------------------------------------------------

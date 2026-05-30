@@ -4,6 +4,7 @@
 // invoice and dispute/appeal record representations.
 
 use super::*;
+use crate::test::setup;
 use soroban_sdk::BytesN;
 
 #[test]
@@ -13,7 +14,7 @@ fn test_invoice_storage_roundtrip_u32_timestamps() {
         id: 42,
         freelancer: t.freelancer.clone(),
         payer: t.payer.clone(),
-        token: t.token.address.clone(),
+        token: t.token.clone(),
         amount: 1_000_000_000,
         due_date: 1_700_000_000u64.try_into().unwrap(),
         discount_rate: 300,
@@ -21,6 +22,7 @@ fn test_invoice_storage_roundtrip_u32_timestamps() {
         funder: Some(t.funder.clone()),
         funded_at: Some(1_700_000_100u64.try_into().unwrap()),
         amount_funded: 500_000_000,
+        amount_paid: 0,
         submitter_reputation: 55,
     };
 

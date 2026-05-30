@@ -303,7 +303,19 @@ pub fn get_payer_score(env: &Env, payer: &Address) -> u32 {
                         decayed_score = decayed_score.saturating_sub(decay_amount);
                     }
 
-                    rep.score = (decayed_score.min(100)) as u32;
+                    let new_score = (decayed_score.min(100)) as u32;
+                    if new_score != rep.score {
+                        rep.score = new_score;
+                        rep.last_activity_ledger = current_ledger;
+                        env.storage()
+                            .persistent()
+                            .set(&StorageKey::PayerScore(payer.clone()), &rep);
+
+                        // Sync with ReputationProfile and trigger event
+                        let mut profile = get_reputation(env, payer);
+                        profile.score = new_score;
+                        set_reputation(env, &profile);
+                    }
                 }
             }
 
@@ -336,6 +348,11 @@ pub fn set_payer_score(env: &Env, payer: &Address, score: u32) {
         env.storage().persistent().set(&key, &rep);
     }
 
+    // Sync with ReputationProfile so they are completely aligned
+    let mut profile = get_reputation(env, payer);
+    profile.score = score;
+    set_reputation(env, &profile);
+
     if old_score != score {
         crate::top_payers::update_top_payers_on_score_change(env, payer, score);
     }
@@ -364,6 +381,10 @@ pub fn get_reputation(env: &Env, address: &Address) -> ReputationProfile {
 /// Uses lazy initialisation: zero-value profiles are not stored.
 pub fn set_reputation(env: &Env, profile: &ReputationProfile) {
     let key = StorageKey::Reputation(profile.address.clone());
+    let old_profile = get_reputation(env, &profile.address);
+    let old_score = old_profile.score;
+    let new_score = profile.score;
+
     let is_empty = profile.invoices_submitted == 0
         && profile.invoices_paid == 0
         && profile.invoices_defaulted == 0
@@ -373,13 +394,45 @@ pub fn set_reputation(env: &Env, profile: &ReputationProfile) {
         if env.storage().persistent().has(&key) {
             env.storage().persistent().remove(&key);
         }
-        return;
+    } else {
+        env.storage().persistent().set(&key, profile);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 1_000_000, 2_000_000);
     }
 
-    env.storage().persistent().set(&key, profile);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, 1_000_000, 2_000_000);
+    if old_score != new_score
+        || old_profile.invoices_submitted != profile.invoices_submitted
+        || old_profile.invoices_paid != profile.invoices_paid
+        || old_profile.invoices_defaulted != profile.invoices_defaulted
+    {
+        env.events().publish_event(&crate::events::ReputationUpdated {
+            address: profile.address.clone(),
+            old_score,
+            new_score,
+            invoices_submitted: profile.invoices_submitted,
+            invoices_paid: profile.invoices_paid,
+            invoices_defaulted: profile.invoices_defaulted,
+        });
+    }
+}
+
+pub fn increment_invoices_submitted(env: &Env, address: &Address) {
+    let mut profile = get_reputation(env, address);
+    profile.invoices_submitted += 1;
+    set_reputation(env, &profile);
+}
+
+pub fn increment_invoices_paid(env: &Env, address: &Address) {
+    let mut profile = get_reputation(env, address);
+    profile.invoices_paid += 1;
+    set_reputation(env, &profile);
+}
+
+pub fn increment_invoices_defaulted(env: &Env, address: &Address) {
+    let mut profile = get_reputation(env, address);
+    profile.invoices_defaulted += 1;
+    set_reputation(env, &profile);
 }
 
 // ----------------------------------------------------------------

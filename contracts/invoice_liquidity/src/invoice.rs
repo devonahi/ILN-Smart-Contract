@@ -1,5 +1,5 @@
-use crate::storage::DataKey as StorageKey;
-use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, IntoVal};
+pub use crate::storage::DataKey as StorageKey;
+use soroban_sdk::{contracttype, Address, BytesN, Env, IntoVal, Symbol};
 
 // ----------------------------------------------------------------
 // Status enum — tracks lifecycle of invoice
@@ -86,7 +86,7 @@ pub struct ReputationProfile {
 }
 
 #[contracttype]
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ContractStats {
     pub total_invoices: u64,
     pub total_funded: u64,
@@ -236,7 +236,9 @@ pub fn read_next_invoice_id(env: &Env) -> u64 {
 }
 
 pub fn write_next_invoice_id(env: &Env, id: u64) {
-    env.storage().instance().set(&StorageKey::NextInvoiceId, &id);
+    env.storage()
+        .instance()
+        .set(&StorageKey::NextInvoiceId, &id);
 }
 
 pub fn next_invoice_id(env: &Env) -> Result<u64, crate::errors::ContractError> {
@@ -546,9 +548,10 @@ pub fn add_volume(env: &Env, token: &Address, amount: i128) {
         .persistent()
         .get(&StorageKey::TokenVolume(token.clone()))
         .unwrap_or(0);
-    env.storage()
-        .persistent()
-        .set(&StorageKey::TokenVolume(token.clone()), &(current_per_token + amount));
+    env.storage().persistent().set(
+        &StorageKey::TokenVolume(token.clone()),
+        &(current_per_token + amount),
+    );
 
     // Preserve legacy aggregate token counters for compatibility.
     let token_list: soroban_sdk::Vec<Address> = env

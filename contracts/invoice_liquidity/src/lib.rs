@@ -20,6 +20,15 @@ mod tests_new_features;
 mod tests_pagination;
 mod tests_regression;
 mod tests_xlm_support;
+#[cfg(test)]
+mod tests_discount_rate;
+#[cfg(test)]
+mod tests_error_cases;
+#[cfg(test)]
+mod tests_stress;
+#[cfg(test)]
+mod tests_lifecycle_integration;
+pub mod constants;
 
 pub use crate::invoice::{
     AppealRecord, Invoice, InvoiceParams, InvoiceStatus, LpFundRequest, ReputationProfile,

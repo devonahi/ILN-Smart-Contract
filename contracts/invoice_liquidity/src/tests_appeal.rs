@@ -95,7 +95,7 @@ fn make_defaulted_invoice(t: &AppealTestEnv) -> u64 {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
     // Advance time past due_date.
     let mut ledger = t.env.ledger().get();

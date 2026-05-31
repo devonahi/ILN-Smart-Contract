@@ -102,7 +102,7 @@ fn fund_succeeds_for_allowlisted_token() {
     let t = setup();
     let id = submit(&t, &t.usdc.address);
     // usdc was allowlisted at init → funding works.
-    t.contract.fund_invoice(&t.lp, &id, &AMOUNT);
+    t.contract.fund_invoice(&t.lp, &id, &AMOUNT, &false);
     assert_eq!(t.contract.get_invoice(&id).status, InvoiceStatus::Funded);
 }
 
@@ -124,7 +124,7 @@ fn add_token_then_fund_succeeds() {
     t.contract.add_token(&new_token.address);
 
     let id = submit(&t, &new_token.address);
-    t.contract.fund_invoice(&t.lp, &id, &AMOUNT);
+    t.contract.fund_invoice(&t.lp, &id, &AMOUNT, &false);
     assert_eq!(t.contract.get_invoice(&id).status, InvoiceStatus::Funded);
 }
 
@@ -183,7 +183,7 @@ fn fund_succeeds_when_payer_reputation_meets_threshold() {
     // Fresh payers have the neutral default score of 50.
     t.contract.set_min_payer_reputation(&40);
     let id = submit(&t, &t.usdc.address);
-    t.contract.fund_invoice(&t.lp, &id, &AMOUNT);
+    t.contract.fund_invoice(&t.lp, &id, &AMOUNT, &false);
     assert_eq!(t.contract.get_invoice(&id).status, InvoiceStatus::Funded);
 }
 
@@ -216,7 +216,7 @@ fn mark_paid_nonexistent_invoice_returns_not_found() {
 fn fund_then_mark_paid_full_lifecycle_still_works() {
     let t = setup();
     let id = submit(&t, &t.usdc.address);
-    t.contract.fund_invoice(&t.lp, &id, &AMOUNT);
+    t.contract.fund_invoice(&t.lp, &id, &AMOUNT, &false);
     t.contract.mark_paid(&id, &AMOUNT);
     assert_eq!(t.contract.get_invoice(&id).status, InvoiceStatus::Paid);
 }

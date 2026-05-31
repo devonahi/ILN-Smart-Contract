@@ -102,7 +102,7 @@ fn benchmark_fund_invoice() {
     );
 
     measure(&bench.env, "fund_invoice", || {
-        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT);
+        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT, &false);
     });
 }
 
@@ -120,7 +120,7 @@ fn benchmark_mark_paid() {
     );
     bench
         .contract
-        .fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT);
+        .fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT, &false);
 
     measure(&bench.env, "mark_paid", || {
         bench
@@ -156,7 +156,7 @@ fn benchmark_all_functions_summary() {
         &bench.token,
     );
     results.push(measure(&bench.env, "fund_invoice", || {
-        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT);
+        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT, &false);
     }));
     results.push(measure(&bench.env, "mark_paid", || {
         bench

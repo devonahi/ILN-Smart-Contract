@@ -116,7 +116,7 @@ fn assert_full_lifecycle_for_token(
     let lp_before = token.client.balance(&env.lp);
     let payer_before = token.client.balance(&env.payer);
 
-    env.contract.fund_invoice(&env.lp, &invoice_id, &amount);
+    env.contract.fund_invoice(&env.lp, &invoice_id, &amount, &false);
 
     let discount = expected_discount(amount);
     assert_eq!(
@@ -187,7 +187,7 @@ fn test_admin_removing_token_mid_flight_does_not_break_existing_invoice_settleme
 
     env.contract.remove_token(&env.eurc.address);
 
-    env.contract.fund_invoice(&env.lp, &invoice_id, &amount);
+    env.contract.fund_invoice(&env.lp, &invoice_id, &amount, &false);
     env.contract.mark_paid(&invoice_id, &INVOICE_AMOUNT);
 
     let invoice = env.contract.get_invoice(&invoice_id);
@@ -208,9 +208,9 @@ fn test_same_lp_can_settle_invoices_independently_across_different_tokens() {
     let eurc_lp_before = env.eurc.client.balance(&env.lp);
 
     env.contract
-        .fund_invoice(&env.lp, &usdc_invoice, &usdc_amount);
+        .fund_invoice(&env.lp, &usdc_invoice, &usdc_amount, &false);
     env.contract
-        .fund_invoice(&env.lp, &eurc_invoice, &eurc_amount);
+        .fund_invoice(&env.lp, &eurc_invoice, &eurc_amount, &false);
 
     env.contract.mark_paid(&usdc_invoice, &INVOICE_AMOUNT);
 
@@ -258,9 +258,9 @@ fn test_amounts_preserve_precision_for_6_and_7_decimal_token_paths() {
     let xlm_lp_before = env.xlm.client.balance(&env.lp);
 
     env.contract
-        .fund_invoice(&env.lp, &eurc_invoice, &eurc_amount);
+        .fund_invoice(&env.lp, &eurc_invoice, &eurc_amount, &false);
     env.contract
-        .fund_invoice(&env.lp, &xlm_invoice, &xlm_amount);
+        .fund_invoice(&env.lp, &xlm_invoice, &xlm_amount, &false);
 
     assert_eq!(
         env.eurc.client.balance(&env.freelancer) - eurc_freelancer_before,

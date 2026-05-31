@@ -123,7 +123,7 @@ fn test_stress_1000_invoice_lifecycles() {
     let fund_start = Instant::now();
     
     for (i, invoice_id) in invoice_ids.iter().enumerate() {
-        env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT);
+        env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT, &false);
     }
     
     let fund_duration = fund_start.elapsed();
@@ -255,7 +255,7 @@ fn test_stress_1000_partial_fundings() {
     let fund_start = Instant::now();
     
     for (i, invoice_id) in invoice_ids.iter().enumerate() {
-        env.contract.fund_invoice(&env.lp, &invoice_id, &partial_amount);
+        env.contract.fund_invoice(&env.lp, &invoice_id, &partial_amount, &false);
     }
     
     let fund_duration = fund_start.elapsed();

@@ -44,4 +44,7 @@ pub enum ContractError {
     /// Issue #28: payer's reputation is below the configured minimum threshold.
     PayerReputationTooLow = 31,
     ArithmeticOverflow = 32,
+    /// Issue #92: oracle returned unverified for the invoice payer when
+    /// require_oracle_verification was set to true.
+    PayerUnverified = 33,
 }

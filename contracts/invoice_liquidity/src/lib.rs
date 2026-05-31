@@ -755,11 +755,18 @@ impl InvoiceLiquidityContract {
     // fund_invoice (USES invoice.token) — now queue-aware
     // ------------------------------------------------------------
     /// Access: LP only
+    ///
+    /// `require_oracle_verification` — when `true`, the oracle stored in
+    /// contract config is queried for the payer's verification status.
+    /// If the oracle returns `false` (unverified), the call returns
+    /// `ContractError::PayerUnverified`. When `false`, the oracle is not
+    /// consulted and the existing behaviour is preserved.
     pub fn fund_invoice(
         env: Env,
         funder: Address,
         invoice_id: u64,
         fund_amount: i128,
+        require_oracle_verification: bool,
     ) -> Result<(), ContractError> {
         if is_paused(&env) {
             return Err(ContractError::ContractPaused);
@@ -791,6 +798,24 @@ impl InvoiceLiquidityContract {
         if min_payer_reputation > 0 && get_payer_score(&env, &invoice.payer) < min_payer_reputation
         {
             return Err(ContractError::PayerReputationTooLow);
+        }
+
+        // Issue #92: optional oracle identity/creditworthiness verification.
+        // When require_oracle_verification is true, the oracle stored in config
+        // is queried. If no oracle is configured the flag is a no-op.
+        if require_oracle_verification {
+            if let Some(oracle_addr) =
+                crate::storage::get_config(&env).and_then(|c| c.price_oracle)
+            {
+                let is_verified: bool = env.invoke_contract(
+                    &oracle_addr,
+                    &Symbol::new(&env, "is_verified"),
+                    vec![&env, invoice.payer.clone().into_val(&env)],
+                );
+                if !is_verified {
+                    return Err(ContractError::PayerUnverified);
+                }
+            }
         }
 
         if invoice.status == InvoiceStatus::Pending
@@ -1973,3 +1998,5 @@ mod tests_top_payers;
 mod tests_lazy_storage;
 #[cfg(test)]
 mod tests_reputation_events;
+#[cfg(test)]
+mod tests_oracle_verification;

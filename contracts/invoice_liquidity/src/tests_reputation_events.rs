@@ -98,7 +98,7 @@ fn mark_paid_emits_reputation_updated_for_payer_score_and_paid_count() {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
 
     let events_before = t.env.events().all().events().len();
     t.contract.mark_paid(&invoice_id, &INVOICE_AMOUNT);
@@ -129,7 +129,7 @@ fn mark_paid_emits_reputation_updated_for_freelancer_paid_count() {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&invoice_id, &INVOICE_AMOUNT);
 
     // Freelancer: submitted=1 (from submit) + paid=1 (from mark_paid)
@@ -157,7 +157,7 @@ fn claim_default_emits_reputation_updated_score_penalty_and_defaulted_count() {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
 
     // Advance past due date to allow default
     let mut li = t.env.ledger().get();
@@ -196,7 +196,7 @@ fn claim_default_score_floored_at_zero_when_score_below_penalty() {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
 
     let mut li = t.env.ledger().get();
     li.timestamp = due_date + 1;

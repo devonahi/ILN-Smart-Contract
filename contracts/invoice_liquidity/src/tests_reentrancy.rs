@@ -280,3 +280,49 @@ fn test_reentrancy_error_on_concurrent_mark_paid() {
         .mark_paid(&t.payer, &invoice_id_2, &1_000_000_000_i128)
         .expect("Second mark_paid succeeds (guard was properly released)");
 }
+
+#[test]
+fn test_reentrancy_error_returned_on_fund_invoice_reentrant_call() {
+    //! Verify that Error::Reentrancy is actually returned when the lock is already set.
+    //! This test simulates a reentrant state by manually setting the lock before calling fund_invoice.
+
+    let t = setup_reentrancy_test();
+
+    let invoice_id = t
+        .contract
+        .submit_invoice(
+            &t.freelancer,
+            &t.payer,
+            &1_000_000_000_i128,
+            t.env.ledger().timestamp() + DUE_DATE_OFFSET,
+            &500_u32,
+            &t.token.address(),
+        )
+        .unwrap();
+
+    // Manually set the lock to simulate a reentrant state
+    t.env.as_contract(&t.env.current_contract_address(), || {
+        t.env
+            .storage()
+            .instance()
+            .set(&DataKey::ReentrancyLock, &true);
+    });
+
+    // Attempting fund_invoice should now return Reentrancy error
+    let result = t.contract.fund_invoice(&t.funder, &invoice_id, &1_000_000_000_i128);
+
+    assert!(result.is_err(), "fund_invoice should return error when lock is set");
+    assert_eq!(
+        result.unwrap_err(),
+        ContractError::Reentrancy,
+        "Error should be Reentrancy variant"
+    );
+
+    // Clean up: clear the lock for any subsequent tests
+    t.env.as_contract(&t.env.current_contract_address(), || {
+        t.env
+            .storage()
+            .instance()
+            .set(&DataKey::ReentrancyLock, &false);
+    });
+}

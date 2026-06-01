@@ -953,58 +953,61 @@ impl InvoiceLiquidityContract {
     }
 
     // ────────────────────────────────────────────────────────────
-    // cancel_invoice
+    // cancel_invoice (Reentrancy Protected)
     // ────────────────────────────────────────────────────────────
     /// Access: Submitter only
+    /// **Reentrancy Protected:** Yes - This function performs token transfers
     pub fn cancel_invoice(env: Env, invoice_id: u64) -> Result<(), ContractError> {
-        if is_paused(&env) {
-            return Err(ContractError::ContractPaused);
-        }
-
-        if !invoice_exists(&env, invoice_id) {
-            return Err(ContractError::InvoiceNotFound);
-        }
-
-        let mut invoice = load_invoice(&env, invoice_id);
-
-        require_submitter_by_id(&env, &invoice.freelancer, invoice_id)?;
-
-        match invoice.status {
-            InvoiceStatus::Pending => {}
-            InvoiceStatus::PartiallyFunded => {
-                let funders = get_invoice_funders(&env, invoice_id);
-                let token = token_client(&env, &invoice.token);
-                let contract_address = env.current_contract_address();
-                for i in 0..funders.len() {
-                    let (funder_addr, fund_amt) = funders.get(i).unwrap();
-                    let fund_discount = fund_amt
-                        .checked_mul(discount_rate_as_i128(invoice.discount_rate))
-                        .unwrap_or(0)
-                        / 10_000;
-                    let refund = fund_amt - fund_discount;
-                    token.transfer(&contract_address, &funder_addr, &refund);
-                }
+        with_reentrancy_guard(&env, || {
+            if is_paused(&env) {
+                return Err(ContractError::ContractPaused);
             }
-            InvoiceStatus::Funded => return Err(ContractError::AlreadyFunded),
-            InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
-            InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
-            InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
-            InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
-            InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
-            InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
-        }
 
-        invoice.status = InvoiceStatus::Cancelled;
+            if !invoice_exists(&env, invoice_id) {
+                return Err(ContractError::InvoiceNotFound);
+            }
 
-        save_invoice(&env, &invoice);
+            let mut invoice = load_invoice(&env, invoice_id);
 
-        env.events().publish_event(&InvoiceCancelled {
-            invoice_id,
-            freelancer: invoice.freelancer.clone(),
-            status: invoice.status.clone(),
-        });
+            require_submitter_by_id(&env, &invoice.freelancer, invoice_id)?;
 
-        Ok(())
+            match invoice.status {
+                InvoiceStatus::Pending => {}
+                InvoiceStatus::PartiallyFunded => {
+                    let funders = get_invoice_funders(&env, invoice_id);
+                    let token = token_client(&env, &invoice.token);
+                    let contract_address = env.current_contract_address();
+                    for i in 0..funders.len() {
+                        let (funder_addr, fund_amt) = funders.get(i).unwrap();
+                        let fund_discount = fund_amt
+                            .checked_mul(discount_rate_as_i128(invoice.discount_rate))
+                            .unwrap_or(0)
+                            / 10_000;
+                        let refund = fund_amt - fund_discount;
+                        token.transfer(&contract_address, &funder_addr, &refund);
+                    }
+                }
+                InvoiceStatus::Funded => return Err(ContractError::AlreadyFunded),
+                InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+                InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+                InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+                InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+                InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+                InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+            }
+
+            invoice.status = InvoiceStatus::Cancelled;
+
+            save_invoice(&env, &invoice);
+
+            env.events().publish_event(&InvoiceCancelled {
+                invoice_id,
+                freelancer: invoice.freelancer.clone(),
+                status: invoice.status.clone(),
+            });
+
+            Ok(())
+        })
     }
 
     // ────────────────────────────────────────────────────────────
@@ -1528,95 +1531,98 @@ impl InvoiceLiquidityContract {
     // claim_default
     // ----------------------------------------------------------------
     /// Access: LP only
+    /// **Reentrancy Protected:** Yes - This function performs token transfers
     pub fn claim_default(env: Env, funder: Address, invoice_id: u64) -> Result<(), ContractError> {
-        if is_paused(&env) {
-            return Err(ContractError::ContractPaused);
-        }
-
-        require_lp(&env, &funder)?;
-
-        if !invoice_exists(&env, invoice_id) {
-            return Err(ContractError::InvoiceNotFound);
-        }
-
-        let mut invoice = load_invoice(&env, invoice_id);
-
-        let funders = get_invoice_funders(&env, invoice_id);
-        let mut is_funder = false;
-        for i in 0..funders.len() {
-            if funders.get(i).unwrap().0 == funder {
-                is_funder = true;
-                break;
+        with_reentrancy_guard(&env, || {
+            if is_paused(&env) {
+                return Err(ContractError::ContractPaused);
             }
-        }
 
-        if !is_funder {
-            return Err(ContractError::Unauthorized);
-        }
+            require_lp(&env, &funder)?;
 
-        let now = env.ledger().timestamp();
-        if now < u64::from(invoice.due_date) {
-            return Err(ContractError::NotYetDefaulted);
-        }
-
-        match invoice.status {
-            InvoiceStatus::Funded => {}
-            InvoiceStatus::Pending | InvoiceStatus::PartiallyFunded => {
-                return Err(ContractError::NotFunded)
+            if !invoice_exists(&env, invoice_id) {
+                return Err(ContractError::InvoiceNotFound);
             }
-            InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
-            InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
-            InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
-            InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
-            InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
-            InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
-        }
 
-        let token = token_client(&env, &invoice.token);
-        let contract_address = env.current_contract_address();
+            let mut invoice = load_invoice(&env, invoice_id);
 
-        let mut total_refunded = 0;
+            let funders = get_invoice_funders(&env, invoice_id);
+            let mut is_funder = false;
+            for i in 0..funders.len() {
+                if funders.get(i).unwrap().0 == funder {
+                    is_funder = true;
+                    break;
+                }
+            }
 
-        for i in 0..funders.len() {
-            let (funder_addr, fund_amt) = funders.get(i).unwrap();
-            let fund_discount = fund_amt
-                .checked_mul(discount_rate_as_i128(invoice.discount_rate))
-                .unwrap_or(0)
-                / 10_000;
-            let refund = fund_amt - fund_discount;
-            token.transfer(&contract_address, &funder_addr, &refund);
-            total_refunded += refund;
-        }
+            if !is_funder {
+                return Err(ContractError::Unauthorized);
+            }
 
-        invoice.status = InvoiceStatus::Defaulted;
-        save_invoice(&env, &invoice);
+            let now = env.ledger().timestamp();
+            if now < u64::from(invoice.due_date) {
+                return Err(ContractError::NotYetDefaulted);
+            }
 
-        // --- Update payer reputation ---
-        // Snapshot the score BEFORE applying the penalty so appeal_default()
-        // can restore it exactly if the appeal is upheld.
-        let current_score = get_payer_score(&env, &invoice.payer);
-        save_pre_default_payer_score(&env, invoice_id, current_score);
+            match invoice.status {
+                InvoiceStatus::Funded => {}
+                InvoiceStatus::Pending | InvoiceStatus::PartiallyFunded => {
+                    return Err(ContractError::NotFunded)
+                }
+                InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+                InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+                InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+                InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+                InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+                InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+            }
 
-        if current_score > 5 {
-            set_payer_score(&env, &invoice.payer, current_score - 5);
-        } else {
-            set_payer_score(&env, &invoice.payer, 0);
-        }
+            let token = token_client(&env, &invoice.token);
+            let contract_address = env.current_contract_address();
 
-        env.events().publish_event(&InvoiceDefaulted {
-            invoice_id: invoice.id,
-            funder,
-            freelancer: invoice.freelancer.clone(),
-            payer: invoice.payer.clone(),
-            token: invoice.token.clone(),
-            amount: invoice.amount,
-            due_date: u64::from(invoice.due_date),
-            defaulted_at: now,
-            discount_amount: total_refunded,
-            status: invoice.status.clone(),
-        });
+            let mut total_refunded = 0;
 
-        Ok(())
+            for i in 0..funders.len() {
+                let (funder_addr, fund_amt) = funders.get(i).unwrap();
+                let fund_discount = fund_amt
+                    .checked_mul(discount_rate_as_i128(invoice.discount_rate))
+                    .unwrap_or(0)
+                    / 10_000;
+                let refund = fund_amt - fund_discount;
+                token.transfer(&contract_address, &funder_addr, &refund);
+                total_refunded += refund;
+            }
+
+            invoice.status = InvoiceStatus::Defaulted;
+            save_invoice(&env, &invoice);
+
+            // --- Update payer reputation ---
+            // Snapshot the score BEFORE applying the penalty so appeal_default()
+            // can restore it exactly if the appeal is upheld.
+            let current_score = get_payer_score(&env, &invoice.payer);
+            save_pre_default_payer_score(&env, invoice_id, current_score);
+
+            if current_score > 5 {
+                set_payer_score(&env, &invoice.payer, current_score - 5);
+            } else {
+                set_payer_score(&env, &invoice.payer, 0);
+            }
+
+            env.events().publish_event(&InvoiceDefaulted {
+                invoice_id: invoice.id,
+                funder,
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                amount: invoice.amount,
+                due_date: u64::from(invoice.due_date),
+                defaulted_at: now,
+                discount_amount: total_refunded,
+                status: invoice.status.clone(),
+            });
+
+            Ok(())
+        })
     }
 
     // ================================================================

@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
-    Address, Env, Event,
+    Address, Env, Event, BytesN,
 };
 
 // ----------------------------------------------------------------
@@ -94,6 +94,7 @@ fn submit_standard_invoice(t: &TestEnv) -> u64 {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     )
 }
 
@@ -122,6 +123,7 @@ fn test_submit_invoice_stores_correct_fields() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     let invoice = t.contract.get_invoice(&id);
@@ -149,6 +151,7 @@ fn test_get_invoice_returns_existing_invoice() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     let invoice = t.contract.get_invoice(&id);
@@ -179,6 +182,7 @@ fn test_submitter_reputation_snapshot_at_submission() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     let invoice = t.contract.get_invoice(&id);

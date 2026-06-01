@@ -88,6 +88,7 @@ fn test_submit_invoice_with_xlm_token() {
             &due_date,
             &discount_rate,
             &xlm_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     let invoice = client.get_invoice(&invoice_id);
@@ -115,6 +116,7 @@ fn test_fund_invoice_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     // Mint XLM to funder
@@ -156,6 +158,7 @@ fn test_mark_paid_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
@@ -199,6 +202,7 @@ fn test_partial_funding_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
@@ -233,6 +237,7 @@ fn test_xlm_volume_tracking() {
             &due_date,
             &discount_rate,
             &xlm_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);

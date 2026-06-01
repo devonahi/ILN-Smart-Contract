@@ -16,6 +16,7 @@ pub mod rate_logic;
 pub mod storage;
 pub mod top_payers;
 use access::*;
+use soroban_sdk::BytesN;
 pub mod constants;
 pub mod oracle_interface;
 #[cfg(test)]
@@ -515,6 +516,7 @@ impl InvoiceLiquidityContract {
         due_date: u64,
         discount_rate: u32,
         token: Address,
+        referral_code: Option<BytesN<32>>,
     ) -> Result<u64, ContractError> {
         if is_paused(&env) {
             return Err(ContractError::ContractPaused);
@@ -555,6 +557,7 @@ impl InvoiceLiquidityContract {
             funded_at: None,
             amount_funded: 0,
             amount_paid: 0,
+            referral_code: referral_code.clone(),
             submitter_reputation,
         };
 
@@ -577,9 +580,21 @@ impl InvoiceLiquidityContract {
             amount: invoice.amount,
             due_date: u64::from(invoice.due_date),
             discount_rate: invoice.discount_rate,
+            referral_code: referral_code.clone(),
             status: invoice.status.clone(),
             timestamp: env.ledger().timestamp(),
         });
+
+        // Track referral count if provided
+        if let Some(code) = referral_code {
+            let key = crate::storage::DataKey::ReferralCount(code.clone());
+            let current: u64 = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(0);
+            env.storage().persistent().set(&key, &(current + 1));
+        }
 
         Ok(id)
     }
@@ -756,6 +771,7 @@ impl InvoiceLiquidityContract {
                 funded_at: None,
                 amount_funded: 0,
                 amount_paid: 0,
+                referral_code: params.referral_code.clone(),
                 submitter_reputation,
             };
 
@@ -775,14 +791,34 @@ impl InvoiceLiquidityContract {
                 amount: invoice.amount,
                 due_date: u64::from(invoice.due_date),
                 discount_rate: invoice.discount_rate,
+                referral_code: params.referral_code.clone(),
                 status: invoice.status.clone(),
                 timestamp: env.ledger().timestamp(),
             });
+
+            // Track referral count if provided
+            if let Some(code) = params.referral_code {
+                let key = crate::storage::DataKey::ReferralCount(code.clone());
+                let current: u64 = env
+                    .storage()
+                    .persistent()
+                    .get(&key)
+                    .unwrap_or(0);
+                env.storage().persistent().set(&key, &(current + 1));
+            }
 
             ids.push_back(id);
         }
 
         Ok(ids)
+    }
+
+    /// Access: Anyone
+    pub fn get_referral_stats(env: Env, code: BytesN<32>) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ReferralCount(code))
+            .unwrap_or(0)
     }
 
     // ================================================================
@@ -2259,6 +2295,8 @@ mod tests_reputation_events;
 mod tests_oracle_verification;
 #[cfg(test)]
 mod tests_oracle_freshness;
+#[cfg(test)]
+mod tests_referral;
 mod tests_discount_invariants;
 #[cfg(test)]
 mod tests_token_switch;

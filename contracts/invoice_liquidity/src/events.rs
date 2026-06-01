@@ -31,6 +31,7 @@ pub struct InvoiceSubmitted {
     pub amount: i128,
     pub due_date: u64,
     pub discount_rate: u32,
+    pub referral_code: Option<BytesN<32>>,
     pub status: InvoiceStatus,
     /// Ledger timestamp when the invoice was submitted.  Included so indexers
     /// can reconstruct the full invoice record from events alone.

@@ -103,6 +103,7 @@ fn test_dispute_pending_invoice() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     t.contract.dispute_invoice(&id, &reason_hash(&t.env));
@@ -123,6 +124,7 @@ fn test_dispute_funded_invoice() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
@@ -145,6 +147,7 @@ fn test_cannot_fund_disputed_invoice() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     t.contract.dispute_invoice(&id, &reason_hash(&t.env));
@@ -165,6 +168,7 @@ fn test_cannot_mark_paid_disputed_invoice() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
@@ -187,6 +191,7 @@ fn test_resolve_dispute_upheld_refunds_lp() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<BytesN<32>>::None,
     );
 
     let fund_discount = INVOICE_AMOUNT * DISCOUNT_RATE as i128 / 10_000;

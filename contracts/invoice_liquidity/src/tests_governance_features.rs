@@ -97,6 +97,7 @@ fn submit(t: &TestEnv, token: &Address) -> u64 {
         &due,
         &DISCOUNT_RATE,
         token,
+        &Option::<soroban_sdk::BytesN<32>>::None,
     )
 }
 

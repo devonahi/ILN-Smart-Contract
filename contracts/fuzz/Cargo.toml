@@ -13,5 +13,5 @@ invoice_liquidity = { path = "../invoice_liquidity" }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-proptest = "1"
-rand = "0.10.1"
+proptest = { workspace = true }
+rand = { workspace = true }

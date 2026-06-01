@@ -85,6 +85,7 @@ fn make_invoice(t: &crate::test::TestEnv) -> u64 {
             &(now + DUE_DATE_OFFSET),
             &DISCOUNT_RATE,
             &t.token.address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         )
         .unwrap()
 }

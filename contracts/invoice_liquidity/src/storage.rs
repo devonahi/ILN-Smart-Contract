@@ -1,4 +1,4 @@
-use soroban_sdk::{contracttype, Address, Env};
+use soroban_sdk::{contracttype, Address, Env, BytesN};
 
 use crate::config::Config;
 use crate::invoice::{AppealRecord, Invoice, LpFundRequest, ReputationScore};
@@ -41,6 +41,8 @@ pub enum DataKey {
     TotalVolumeEurc,
     TotalVolumeXlm,
     TokenVolume(Address),
+    /// Referral counts keyed by fixed-size code
+    ReferralCount(BytesN<32>),
     Dispute(u64),
     SubmitterInvoices(Address),
     LpInvoices(Address),

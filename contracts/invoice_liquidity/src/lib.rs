@@ -35,6 +35,8 @@ mod tests_stress;
 mod tests_lifecycle_integration;
 #[cfg(test)]
 mod tests_invoice_nft;
+#[cfg(test)]
+mod tests_lp_whitelist;
 
 pub use crate::invoice::{
     AppealRecord, Invoice, InvoiceParams, InvoiceStatus, LpFundRequest, ReputationProfile,
@@ -521,6 +523,7 @@ impl InvoiceLiquidityContract {
         discount_rate: u32,
         token: Address,
         referral_code: Option<BytesN<32>>,
+        allowed_lps: Option<Vec<Address>>,
     ) -> Result<u64, ContractError> {
         if is_paused(&env) {
             return Err(ContractError::ContractPaused);
@@ -543,6 +546,13 @@ impl InvoiceLiquidityContract {
             return Err(ContractError::Unauthorized);
         }
 
+        // Issue #122: Validate LP whitelist size (max 10)
+        if let Some(ref lps) = allowed_lps {
+            if lps.len() > 10 {
+                return Err(ContractError::WhitelistTooLarge);
+            }
+        }
+
         let id = next_invoice_id(&env)?;
 
         // Capture the freelancer's reputation score at submission time
@@ -563,6 +573,7 @@ impl InvoiceLiquidityContract {
             amount_paid: 0,
             referral_code: referral_code.clone(),
             submitter_reputation,
+            allowed_lps: allowed_lps.clone(),
         };
 
         save_invoice(&env, &invoice);
@@ -598,6 +609,7 @@ impl InvoiceLiquidityContract {
             referral_code: referral_code.clone(),
             status: invoice.status.clone(),
             timestamp: env.ledger().timestamp(),
+            allowed_lps: allowed_lps.clone(),
         });
 
         // Track referral count if provided
@@ -768,6 +780,13 @@ impl InvoiceLiquidityContract {
                 return Err(ContractError::Unauthorized);
             }
 
+            // Issue #122: Validate LP whitelist size (max 10)
+            if let Some(ref lps) = params.allowed_lps {
+                if lps.len() > 10 {
+                    return Err(ContractError::WhitelistTooLarge);
+                }
+            }
+
             let id = next_invoice_id(&env)?;
 
             // Capture the freelancer's reputation score at submission time
@@ -788,6 +807,7 @@ impl InvoiceLiquidityContract {
                 amount_paid: 0,
                 referral_code: params.referral_code.clone(),
                 submitter_reputation,
+                allowed_lps: params.allowed_lps.clone(),
             };
 
             save_invoice(&env, &invoice);
@@ -977,6 +997,21 @@ impl InvoiceLiquidityContract {
         if let Some(approved) = get_queue_resolution(&env, invoice_id) {
             if approved != funder {
                 return Err(ContractError::NotApprovedFunder);
+            }
+        }
+
+        // Issue #122: LP whitelist check for private invoices
+        // If the invoice has an LP whitelist, verify the funder is in it.
+        if let Some(ref allowed_lps) = invoice.allowed_lps {
+            let mut is_whitelisted = false;
+            for i in 0..allowed_lps.len() {
+                if allowed_lps.get(i).unwrap() == funder {
+                    is_whitelisted = true;
+                    break;
+                }
+            }
+            if !is_whitelisted {
+                return Err(ContractError::LPNotWhitelisted);
             }
         }
 

@@ -40,6 +40,10 @@ pub struct Invoice {
     pub amount_paid: i128,       // cumulative amount paid by the payer
     pub referral_code: Option<BytesN<32>>, // optional referral code used at submission
     pub submitter_reputation: u32, // snapshot of freelancer's reputation at submission time
+    /// Issue #122: Optional whitelist of LP addresses allowed to fund this invoice.
+    /// If empty/None, invoice is public. If Some, only whitelisted LPs can fund.
+    /// Capped at 10 addresses to limit storage.
+    pub allowed_lps: Option<soroban_sdk::Vec<Address>>,
 }
 
 #[contracttype]
@@ -52,6 +56,8 @@ pub struct InvoiceParams {
     pub discount_rate: u32,
     pub token: Address,
     pub referral_code: Option<BytesN<32>>,
+    /// Issue #122: Optional whitelist of allowed LPs for this invoice
+    pub allowed_lps: Option<soroban_sdk::Vec<Address>>,
 }
 
 #[contracttype]

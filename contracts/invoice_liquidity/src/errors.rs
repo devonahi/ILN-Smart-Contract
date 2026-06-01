@@ -60,4 +60,9 @@ pub enum ContractError {
     InvoiceNftNotFound = 36,
     /// Caller is not the owner of the NFT.
     InvoiceNftNotOwned = 37,
+    // ── Issue #122: LP Whitelist ────────────────────────────────
+    /// LP is not in the whitelist for this private invoice.
+    LPNotWhitelisted = 38,
+    /// Whitelist exceeds maximum size (10 addresses).
+    WhitelistTooLarge = 39,
 }

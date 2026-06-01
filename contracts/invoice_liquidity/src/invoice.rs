@@ -215,6 +215,27 @@ pub fn add_invoice_to_lp(env: &Env, lp: &Address, invoice_id: u64) {
     }
 }
 
+pub fn remove_invoice_from_lp(env: &Env, lp: &Address, invoice_id: u64) {
+    let invoices = get_lp_invoices(env, lp);
+    let mut new_invoices = soroban_sdk::Vec::new(env);
+    for id in invoices.iter() {
+        if id != invoice_id {
+            new_invoices.push_back(id);
+        }
+    }
+    let key = StorageKey::LpInvoices(lp.clone());
+    if new_invoices.is_empty() {
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    } else {
+        env.storage().persistent().set(&key, &new_invoices);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 1_000_000, 2_000_000);
+    }
+}
+
 pub fn save_invoice(env: &Env, invoice: &Invoice) {
     let key = StorageKey::Invoice(invoice.id);
     env.storage().persistent().set(&key, invoice);

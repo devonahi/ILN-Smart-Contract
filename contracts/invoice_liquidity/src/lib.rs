@@ -58,7 +58,7 @@ use invoice::{
     get_min_payer_reputation, get_payer_score, get_pre_default_payer_score, get_queue_resolution,
     get_reputation, get_submitter_invoices, increment_total_funded, increment_total_invoices,
     increment_total_paid, invoice_exists, is_paused, load_invoice, next_invoice_id,
-    remove_invoice_from_submitter, save_appeal, save_dispute, save_fund_queue, save_invoice,
+    remove_invoice_from_lp, remove_invoice_from_submitter, save_appeal, save_dispute, save_fund_queue, save_invoice,
     save_invoice_funders, save_pre_default_payer_score, save_queue_resolution, set_lp_score,
     set_min_payer_reputation, set_paused, set_payer_score, set_reputation, try_load_invoice,
     ContractStats, DisputeRecord, StorageKey, increment_invoices_submitted, increment_invoices_paid,
@@ -295,8 +295,35 @@ impl InvoiceLiquidityContract {
     }
 
     /// Access: Admin only
+    ///
+    /// Reject tokens that implement fee-on-transfer behavior by ensuring a small
+    /// token transfer to the contract results in the same amount being received.
     pub fn add_token(env: Env, token: Address) -> Result<(), ContractError> {
         require_admin(&env)?;
+
+        let token_client = token_client(&env, &token);
+        let contract_address = env.current_contract_address();
+        let test_amount: i128 = 1_000_000;
+        let admin_address: Address = env
+            .storage()
+            .instance()
+            .get(&crate::storage::DataKey::Admin)
+            .unwrap();
+        let before_balance = token_client.balance(&contract_address);
+
+        token_client.transfer(&admin_address, &contract_address, &test_amount);
+
+        let after_balance = token_client.balance(&contract_address);
+        let received = after_balance.checked_sub(before_balance).unwrap_or(0);
+        if received != test_amount {
+            if received > 0 {
+                token_client.transfer(&contract_address, &admin_address, &received);
+            }
+            return Err(ContractError::FeeOnTransferToken);
+        }
+
+        // Return the exact test amount to the admin account after verification.
+        token_client.transfer(&contract_address, &admin_address, &test_amount);
 
         env.storage().persistent().set(
             &crate::storage::DataKey::ApprovedToken(token.clone()),
@@ -1135,6 +1162,72 @@ impl InvoiceLiquidityContract {
             invoice_id,
             old_freelancer,
             new_freelancer,
+            status: invoice.status.clone(),
+        });
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------
+    // transfer_lp_position
+    /// Access: Current LP only
+    pub fn transfer_lp_position(
+        env: Env,
+        invoice_id: u64,
+        new_lp: Address,
+    ) -> Result<(), ContractError> {
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+
+        if !invoice_exists(&env, invoice_id) {
+            return Err(ContractError::InvoiceNotFound);
+        }
+
+        let mut invoice = load_invoice(&env, invoice_id);
+        match invoice.status {
+            InvoiceStatus::Funded => {}
+            InvoiceStatus::Pending | InvoiceStatus::PartiallyFunded => {
+                return Err(ContractError::NotFunded)
+            }
+            InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+            InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+            InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+            InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+            InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+            InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+        }
+
+        let current_lp = invoice
+            .funder
+            .clone()
+            .ok_or(ContractError::Unauthorized)?;
+
+        current_lp.require_auth();
+
+        if current_lp == new_lp {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut funders = get_invoice_funders(&env, invoice_id);
+        for i in 0..funders.len() {
+            let (addr, amt) = funders.get(i).unwrap();
+            if addr == current_lp {
+                funders.set(i, (new_lp.clone(), amt));
+            }
+        }
+        save_invoice_funders(&env, invoice_id, &funders);
+
+        invoice.funder = Some(new_lp.clone());
+        save_invoice(&env, &invoice);
+
+        remove_invoice_from_lp(&env, &current_lp, invoice_id);
+        add_invoice_to_lp(&env, &new_lp, invoice_id);
+
+        env.events().publish_event(&LPPositionTransferred {
+            invoice_id,
+            old_lp: current_lp,
+            new_lp,
             status: invoice.status.clone(),
         });
 

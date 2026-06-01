@@ -570,6 +570,67 @@ fn test_transfer_funded_invoice_fails() {
     assert_eq!(result, Err(Ok(ContractError::AlreadyFunded)));
 }
 
+#[test]
+fn test_transfer_lp_position_updates_funder_and_lp_index() {
+    let t = setup();
+    let id = submit_standard_invoice(&t);
+
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+
+    let new_lp = Address::generate(&t.env);
+    t.contract.transfer_lp_position(&id, &new_lp);
+
+    let invoice = t.contract.get_invoice(&id);
+    assert_eq!(invoice.funder, Some(new_lp.clone()));
+
+    let old_lp_invoices = t.contract.list_invoices_by_lp(&t.funder, &0, &50);
+    assert!(!old_lp_invoices.iter().any(|invoice| invoice.id == id));
+
+    let new_lp_invoices = t.contract.list_invoices_by_lp(&new_lp, &0, &50);
+    assert!(new_lp_invoices.iter().any(|invoice| invoice.id == id));
+}
+
+#[test]
+fn test_transfer_lp_position_pays_new_lp_on_settlement() {
+    let t = setup();
+    let id = submit_standard_invoice(&t);
+
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+
+    let new_lp = Address::generate(&t.env);
+    t.contract.transfer_lp_position(&id, &new_lp);
+
+    let old_lp_balance_before = t.token.balance(&t.funder);
+    let new_lp_balance_before = t.token.balance(&new_lp);
+
+    t.contract.mark_paid(&id, &INVOICE_AMOUNT);
+
+    let old_lp_balance_after = t.token.balance(&t.funder);
+    let new_lp_balance_after = t.token.balance(&new_lp);
+
+    assert_eq!(old_lp_balance_after, old_lp_balance_before);
+    assert_eq!(new_lp_balance_after - new_lp_balance_before, INVOICE_AMOUNT);
+}
+
+#[test]
+fn test_transfer_lp_position_can_transfer_twice() {
+    let t = setup();
+    let id = submit_standard_invoice(&t);
+
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+
+    let new_lp = Address::generate(&t.env);
+    let second_lp = Address::generate(&t.env);
+
+    t.contract.transfer_lp_position(&id, &new_lp);
+    t.contract.transfer_lp_position(&id, &second_lp);
+
+    let invoice = t.contract.get_invoice(&id);
+    assert_eq!(invoice.funder, Some(second_lp.clone()));
+    let invoices = t.contract.list_invoices_by_lp(&second_lp, &0, &50);
+    assert!(invoices.iter().any(|invoice| invoice.id == id));
+}
+
 // ----------------------------------------------------------------
 // fund_invoice — happy path
 // ----------------------------------------------------------------

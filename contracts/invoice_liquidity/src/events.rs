@@ -175,6 +175,16 @@ pub struct InvoiceCancelled {
     pub status: InvoiceStatus,
 }
 
+#[contractevent(topics = ["lp_position_transferred"])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LPPositionTransferred {
+    #[topic]
+    pub invoice_id: u64,
+    pub old_lp: Address,
+    pub new_lp: Address,
+    pub status: InvoiceStatus,
+}
+
 /// Emitted whenever the contract admin address is updated.
 /// Provides a permanent on-chain audit trail for admin transitions.
 #[contractevent(topics = ["admin_changed"])]

@@ -7,6 +7,40 @@ This guide covers everything you need to go from a fresh machine to an accepted 
 
 ## Table of Contents
 
+## 📝 Commit Messages
+
+This project uses [Conventional Commits](https://www.conventionalcommits.org/) so that the changelog can be generated automatically with `make changelog`.
+
+**Format:** `<type>(<optional scope>): <description>`
+
+| Type | When to use |
+|------|-------------|
+| `feat` | A new feature or contract function |
+| `fix` | A bug fix |
+| `refactor` | Code change that neither fixes a bug nor adds a feature |
+| `perf` | Performance improvement |
+| `test` | Adding or updating tests |
+| `docs` | Documentation only changes |
+| `chore` | Build process, tooling, or dependency updates |
+
+**Examples:**
+```
+feat(governance): add quorum requirement for proposal passing
+fix: resolve discount rate validation overflow
+docs: add architecture decision records
+test: add fuzz suite for submit_invoice
+chore: add CHANGELOG and git-cliff changelog automation
+```
+
+Breaking changes must include `BREAKING CHANGE:` in the commit footer:
+```
+feat!: rename fund_invoice to fund
+
+BREAKING CHANGE: fund_invoice has been renamed to fund in the invoice_liquidity contract.
+```
+
+
+## 🧪 Testing
 1. [Environment Setup](#1-environment-setup)
 2. [Building the Contracts](#2-building-the-contracts)
 3. [Running Tests](#3-running-tests)

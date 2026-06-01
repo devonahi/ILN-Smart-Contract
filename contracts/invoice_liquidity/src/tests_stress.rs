@@ -65,9 +65,10 @@ fn setup() -> StressTestEnv {
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
-    // Need XLM token for initialization
+    // Need EURC and XLM token for initialization
+    let eurc = register_mock_token(&env);
     let xlm = register_mock_token(&env);
-    contract.initialize(&admin, &token.address, &xlm.address);
+    contract.initialize(&admin, &token.address, &eurc.address, &xlm.address);
 
     let mut ledger_info = env.ledger().get();
     ledger_info.timestamp = 1_700_000_000;
@@ -125,7 +126,7 @@ fn test_stress_1000_invoice_lifecycles() {
     let fund_start = Instant::now();
     
     for (i, invoice_id) in invoice_ids.iter().enumerate() {
-        env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT);
+        env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT, &false);
     }
     
     let fund_duration = fund_start.elapsed();
@@ -257,7 +258,7 @@ fn test_stress_1000_partial_fundings() {
     let fund_start = Instant::now();
     
     for (i, invoice_id) in invoice_ids.iter().enumerate() {
-        env.contract.fund_invoice(&env.lp, &invoice_id, &partial_amount);
+        env.contract.fund_invoice(&env.lp, &invoice_id, &partial_amount, &false);
     }
     
     let fund_duration = fund_start.elapsed();

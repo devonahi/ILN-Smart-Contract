@@ -70,7 +70,7 @@ fn tests_lp_funding_details_event() {
     // ------------------------------------------------------------
     // Fund invoice
     // ------------------------------------------------------------
-    client.fund_invoice(&lp, &invoice_id, &5_000_000i128);
+    client.fund_invoice(&lp, &invoice_id, &5_000_000i128, &false);
 
     // ------------------------------------------------------------
     // Verify event emitted

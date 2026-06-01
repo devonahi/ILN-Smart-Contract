@@ -124,7 +124,7 @@ fn test_fund_invoice_with_xlm() {
 
     // Fund invoice with XLM
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT, &false);
 
     let invoice = client.get_invoice(&invoice_id);
     assert_eq!(invoice.status, InvoiceStatus::Funded);
@@ -163,7 +163,7 @@ fn test_mark_paid_with_xlm() {
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
 
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT, &false);
 
     // Mint XLM to payer for payment
     xlm_admin.mint(&payer, &XLM_INVOICE_AMOUNT);
@@ -207,7 +207,7 @@ fn test_partial_funding_with_xlm() {
 
     // Partially fund with XLM
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_FUND_AMOUNT);
+        .fund_invoice(&funder, &invoice_id, &XLM_FUND_AMOUNT, &false);
 
     let invoice = client.get_invoice(&invoice_id);
     assert_eq!(invoice.status, InvoiceStatus::PartiallyFunded);
@@ -240,7 +240,7 @@ fn test_xlm_volume_tracking() {
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
 
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT, &false);
 
     // Check that XLM volume is tracked
     let stats = client.get_contract_stats();
@@ -276,7 +276,7 @@ fn test_mixed_token_operations() {
 
     usdc_admin.mint(&funder, &USDC_INVOICE_AMOUNT);
     client
-        .fund_invoice(&funder, &usdc_invoice_id, &USDC_INVOICE_AMOUNT);
+        .fund_invoice(&funder, &usdc_invoice_id, &USDC_INVOICE_AMOUNT, &false);
 
     // Submit XLM invoice
     let xlm_invoice_id = client
@@ -291,7 +291,7 @@ fn test_mixed_token_operations() {
 
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
     client
-        .fund_invoice(&funder, &xlm_invoice_id, &XLM_INVOICE_AMOUNT);
+        .fund_invoice(&funder, &xlm_invoice_id, &XLM_INVOICE_AMOUNT, &false);
 
     // Verify both volumes are tracked correctly
     let stats = client.get_contract_stats();
@@ -326,7 +326,7 @@ fn test_xlm_precision_in_calculations() {
 
     // Fund and verify discount calculation is correct with 7 decimal precision
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT, &false);
 
     let invoice = client.get_invoice(&invoice_id);
 

@@ -123,7 +123,7 @@ fn test_mark_paid_updates_top_payers_heap() {
         &discount_rate,
         &t.token.address,
     );
-    t.contract.fund_invoice(&t.funder, &id, &amount);
+    t.contract.fund_invoice(&t.funder, &id, &amount, &false);
     t.contract.mark_paid(&id, &amount);
 
     assert_eq!(t.contract.payer_score(&t.payer), 51);

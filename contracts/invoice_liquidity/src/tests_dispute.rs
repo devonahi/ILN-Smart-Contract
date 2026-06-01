@@ -65,7 +65,8 @@ fn setup_dispute() -> DisputeTestEnv {
     let xlm_addr = xlm_id.address();
 
     // usdc_admin acts as the contract admin.
-    contract.initialize(&usdc_admin, &usdc_addr, &xlm_addr);
+    let eurc_addr = Address::generate(&env);
+    contract.initialize(&usdc_admin, &usdc_addr, &eurc_addr, &xlm_addr);
 
     let mut ledger = env.ledger().get();
     ledger.timestamp = 1_700_000_000;
@@ -124,7 +125,7 @@ fn test_dispute_funded_invoice() {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
     t.contract.dispute_invoice(&id, &reason_hash(&t.env));
 
@@ -166,7 +167,7 @@ fn test_cannot_mark_paid_disputed_invoice() {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
     t.contract.dispute_invoice(&id, &reason_hash(&t.env));
 
@@ -193,7 +194,7 @@ fn test_resolve_dispute_upheld_refunds_lp() {
 
     let initial_funder_balance = t.token.balance(&t.funder);
 
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
     assert_eq!(t.token.balance(&t.funder), initial_funder_balance - cost);
 
@@ -223,7 +224,7 @@ fn test_resolve_dispute_rejected_restores_funded_status() {
         &t.token.address,
     );
 
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
     t.contract.dispute_invoice(&id, &reason_hash(&t.env));
 
     // Admin rejects dispute (resolution = 2)

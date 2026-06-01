@@ -60,7 +60,7 @@ fn emits_invoice_paid_event_with_full_settlement_details() {
     // ------------------------------------------------------------
     // Fund invoice
     // ------------------------------------------------------------
-    client.fund_invoice(&lp, &invoice_id, &1_000_000_i128);
+    client.fund_invoice(&lp, &invoice_id, &1_000_000_i128, &false);
 
     // ------------------------------------------------------------
     // Expected math

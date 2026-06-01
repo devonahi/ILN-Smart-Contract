@@ -55,7 +55,8 @@ fn setup() -> TestEnv {
     let xlm_contract_id = env.register_stellar_asset_contract_v2(xlm_admin);
     let xlm_address = xlm_contract_id.address();
 
-    contract.initialize(&admin, &usdc_address, &xlm_address);
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&admin, &usdc_address, &eurc_address, &xlm_address);
 
     let mut ledger_info = env.ledger().get();
     ledger_info.timestamp = 1_700_000_000;
@@ -125,7 +126,7 @@ fn test_contract_stats_increments_on_fund() {
     );
 
     t.contract
-        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
 
     let stats = t.contract.get_contract_stats();
     assert_eq!(stats.total_invoices, 1);
@@ -149,7 +150,7 @@ fn test_contract_stats_increments_on_mark_paid() {
     );
 
     t.contract
-        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&invoice_id, &INVOICE_AMOUNT);
 
     let stats = t.contract.get_contract_stats();
@@ -208,7 +209,7 @@ fn test_contract_stats_tracks_token_volumes_and_oracle_normalization() {
     );
 
     t.contract
-        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&invoice_id, &INVOICE_AMOUNT);
 
     let stats = t.contract.get_contract_stats();
@@ -297,7 +298,7 @@ fn test_pause_blocks_mark_paid() {
     );
 
     t.contract
-        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
     t.contract.pause();
 
     let result = t.contract.try_mark_paid(&invoice_id, &INVOICE_AMOUNT);
@@ -343,7 +344,7 @@ fn test_pause_blocks_claim_default() {
     );
 
     t.contract
-        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT);
+        .fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
 
     // Advance time past due date
     let mut ledger = t.env.ledger().get();

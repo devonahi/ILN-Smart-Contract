@@ -64,7 +64,8 @@ fn setup() -> LifecycleTestEnv {
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
-    contract.initialize(&admin, &token.address, &xlm.address);
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&admin, &token.address, &eurc_address, &xlm.address);
 
     let mut ledger_info = env.ledger().get();
     ledger_info.timestamp = 1_700_000_000;
@@ -126,7 +127,7 @@ fn test_lifecycle_usdc_full() {
     assert_eq!(stats_after_submit.total_invoices, stats_initial.total_invoices + 1);
     
     // Step 2: Fund invoice
-    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT);
+    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT, &false);
     
     let discount = expected_discount(INVOICE_AMOUNT);
     let expected_payout = INVOICE_AMOUNT - discount;
@@ -220,7 +221,7 @@ fn test_lifecycle_eurc_full() {
     assert_eq!(invoice_pending.token, eurc.address);
     
     // Step 2: Fund invoice
-    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT);
+    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT, &false);
     
     let discount = expected_discount(INVOICE_AMOUNT);
     let expected_payout = INVOICE_AMOUNT - discount;
@@ -294,7 +295,7 @@ fn test_lifecycle_xlm_full() {
     assert_eq!(invoice_pending.token, env.xlm.address);
     
     // Step 2: Fund invoice
-    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT);
+    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT, &false);
     
     let discount = expected_discount(INVOICE_AMOUNT);
     let expected_payout = INVOICE_AMOUNT - discount;
@@ -373,7 +374,7 @@ fn test_lifecycle_stat_counters_increment() {
     );
     
     // Fund invoice
-    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT);
+    env.contract.fund_invoice(&env.lp, &invoice_id, &INVOICE_AMOUNT, &false);
     
     // Verify total_funded incremented
     let stats_after_fund = env.contract.get_contract_stats();

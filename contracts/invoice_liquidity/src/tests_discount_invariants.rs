@@ -88,7 +88,8 @@ fn setup_invariant(invoice_amount: i128) -> InvariantEnv {
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
-    contract.initialize(&usdc_admin, &usdc_address, &xlm_address);
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&usdc_admin, &usdc_address, &eurc_address, &xlm_address);
 
     let mut ledger = env.ledger().get();
     ledger.timestamp = LEDGER_TIMESTAMP;

@@ -43,4 +43,22 @@ pub enum ContractError {
     NotDisputed = 30,
     InvoiceDisputed = 31,
     NotFunded = 32,
+    InvoiceAppealed = 22,
+    AlreadyDisputed = 23,
+    NotDisputed = 24,
+    InvoiceDisputed = 25,
+    ContractPaused = 26,
+    DueDateTooSoon = 27,
+    DueDateTooFar = 28,
+    SelfInvoice = 29,
+    OverpaymentRejected = 30,
+    /// Issue #28: payer's reputation is below the configured minimum threshold.
+    PayerReputationTooLow = 31,
+    ArithmeticOverflow = 32,
+    /// Issue #92: oracle returned unverified for the invoice payer when
+    /// require_oracle_verification was set to true.
+    PayerUnverified = 33,
+    /// Issue #93: oracle data is older than max_oracle_age_ledgers and must
+    /// be rejected to prevent stale-data attacks.
+    OracleDataStale = 34,
 }

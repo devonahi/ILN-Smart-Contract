@@ -123,7 +123,7 @@ fn assert_lifecycle_for_token(
     let payer_before = token.client.balance(&env.payer);
 
     // 2. Fund
-    env.contract.fund_invoice(&env.lp, &invoice_id, &amount);
+    env.contract.fund_invoice(&env.lp, &invoice_id, &amount, &false);
 
     let discount = expected_discount(amount);
     let expected_payout = amount - discount;

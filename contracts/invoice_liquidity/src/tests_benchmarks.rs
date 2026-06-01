@@ -38,7 +38,8 @@ fn setup_benchmark_env() -> BaseBenchEnv {
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
-    contract.initialize(&usdc_admin, &usdc.address(), &xlm.address());
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&usdc_admin, &usdc.address(), &eurc_address, &xlm.address());
 
     let freelancer = Address::generate(&env);
     let payer = Address::generate(&env);
@@ -102,7 +103,7 @@ fn benchmark_fund_invoice() {
     );
 
     measure(&bench.env, "fund_invoice", || {
-        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT);
+        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT, &false);
     });
 }
 
@@ -120,7 +121,7 @@ fn benchmark_mark_paid() {
     );
     bench
         .contract
-        .fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT);
+        .fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT, &false);
 
     measure(&bench.env, "mark_paid", || {
         bench
@@ -156,7 +157,7 @@ fn benchmark_all_functions_summary() {
         &bench.token,
     );
     results.push(measure(&bench.env, "fund_invoice", || {
-        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT);
+        bench.contract.fund_invoice(&bench.lp, &id, &BENCH_INVOICE_AMOUNT, &false);
     }));
     results.push(measure(&bench.env, "mark_paid", || {
         bench

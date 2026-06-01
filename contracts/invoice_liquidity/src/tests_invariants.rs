@@ -57,7 +57,8 @@ fn setup() -> TestEnv {
     let xlm_id = env.register_stellar_asset_contract_v2(xlm_admin);
     let xlm_address = xlm_id.address();
 
-    contract.initialize(&admin, &usdc_address, &xlm_address);
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&admin, &usdc_address, &eurc_address, &xlm_address);
 
     let mut info = env.ledger().get();
     info.timestamp = 1_700_000_000;
@@ -178,7 +179,7 @@ fn invariants_hold_after_submit() {
 fn invariants_hold_after_fund() {
     let t = setup();
     let id = submit_standard_invoice(&t);
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
     check_invariants(&t.env, &t.contract);
 }
 
@@ -186,7 +187,7 @@ fn invariants_hold_after_fund() {
 fn invariants_hold_after_mark_paid() {
     let t = setup();
     let id = submit_standard_invoice(&t);
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&id, &INVOICE_AMOUNT);
     check_invariants(&t.env, &t.contract);
 }
@@ -207,7 +208,7 @@ fn invariants_hold_across_multiple_invoices() {
     let id2 = submit_standard_invoice(&t);
     let id3 = submit_standard_invoice(&t);
 
-    t.contract.fund_invoice(&t.funder, &id1, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id1, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&id1, &INVOICE_AMOUNT);
     check_invariants(&t.env, &t.contract);
 
@@ -238,7 +239,7 @@ fn invariant_logic_catches_funded_without_funder() {
     check_invariants(&t.env, &t.contract);
 
     // Fund so we get a Funded invoice, then verify funder IS set.
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
     let funded = t.contract.get_invoice(&id);
     assert!(
         funded.funder.is_some(),

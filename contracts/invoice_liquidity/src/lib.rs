@@ -26,9 +26,6 @@ mod tests_new_features;
 mod tests_pagination;
 mod tests_regression;
 mod tests_xlm_support;
-<<<<<<< HEAD
-#[cfg(test)]
-mod tests_min_invoice_amount;
 #[cfg(test)]
 mod tests_error_cases;
 #[cfg(test)]
@@ -48,6 +45,7 @@ use soroban_sdk::{
     Symbol, Vec,
 };
 
+use crate::storage::get_admin;
 use events::{
     AdminChanged, AppealResolved, ContractPaused, ContractUnpaused, ContractUpgraded,
     DefaultAppealed, DisputeResolved, FundQueueResolved, FundRequested, InvoiceCancelled,
@@ -55,7 +53,6 @@ use events::{
     InvoiceSubmitted, InvoiceTokenChanged, InvoiceTransferred, InvoiceUpdated, ParameterUpdated, TokenAdded,
     TokenRemoved,
 };
-use crate::storage::get_admin;
 use invoice::{
     add_invoice_to_lp, add_invoice_to_submitter, add_volume, get_appeal, get_contract_stats,
     get_dispute, get_fund_queue, get_invoice_funders, get_lp_invoices, get_lp_score,
@@ -81,10 +78,6 @@ const MIN_INVOICE_DURATION: u64 = 24 * 60 * 60;
 /// Maximum invoice duration: 365 days (in seconds)
 const MAX_INVOICE_DURATION: u64 = 365 * 24 * 60 * 60;
 
-<<<<<<< HEAD
-/// Minimum invoice amount (in token's smallest unit). Default: 1_000_000 (1 USDC-equivalent)
-const MIN_INVOICE_AMOUNT: i128 = 1_000_000;
-=======
 /// Default oracle freshness window: ~24 hours at one ledger per 5 seconds.
 /// Governance can override this per-contract via set_max_oracle_age().
 pub const DEFAULT_MAX_ORACLE_AGE_LEDGERS: u64 = 17_280;
@@ -107,7 +100,6 @@ pub struct OracleVerificationResponse {
     /// fund_invoice() rejects responses where current_ledger - timestamp ≥ max_oracle_age_ledgers.
     pub timestamp: u32,
 }
->>>>>>> upstream/main
 
 // ----------------------------------------------------------------
 // CONTRACT
@@ -550,11 +542,7 @@ impl InvoiceLiquidityContract {
         let id = next_invoice_id(&env)?;
 
         // Capture the freelancer's reputation score at submission time
-<<<<<<< HEAD
-        let submitter_rep = get_payer_score(&env, &freelancer);
-=======
         let submitter_reputation = get_payer_score(&env, &freelancer);
->>>>>>> upstream/main
 
         let invoice = Invoice {
             id,
@@ -569,12 +557,8 @@ impl InvoiceLiquidityContract {
             funded_at: None,
             amount_funded: 0,
             amount_paid: 0,
-<<<<<<< HEAD
-            submitter_rep,
-=======
             referral_code: referral_code.clone(),
             submitter_reputation,
->>>>>>> upstream/main
         };
 
         save_invoice(&env, &invoice);
@@ -772,11 +756,7 @@ impl InvoiceLiquidityContract {
             let id = next_invoice_id(&env)?;
 
             // Capture the freelancer's reputation score at submission time
-<<<<<<< HEAD
-            let submitter_rep = get_payer_score(&env, &params.freelancer);
-=======
             let submitter_reputation = get_payer_score(&env, &params.freelancer);
->>>>>>> upstream/main
 
             let invoice = Invoice {
                 id,
@@ -791,12 +771,8 @@ impl InvoiceLiquidityContract {
                 funded_at: None,
                 amount_funded: 0,
                 amount_paid: 0,
-<<<<<<< HEAD
-                submitter_rep,
-=======
                 referral_code: params.referral_code.clone(),
                 submitter_reputation,
->>>>>>> upstream/main
             };
 
             save_invoice(&env, &invoice);
@@ -1136,36 +1112,7 @@ impl InvoiceLiquidityContract {
             increment_total_funded(&env);
         }
 
-<<<<<<< HEAD
-        // Add to volume counter - get token list from storage
-        let token_list: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&crate::storage::DataKey::TokenList)
-            .unwrap_or(Vec::new(&env));
-        
-        // Get token addresses from list, or use dummy addresses if not available
-        let usdc_addr = if token_list.len() > 0 {
-            token_list.get(0).unwrap()
-        } else {
-            invoice.token.clone()
-        };
-        // token_list layout: [usdc, xlm, eurc?]. Choose indices defensively.
-        let eurc_addr = if token_list.len() > 2 {
-            token_list.get(2).unwrap()
-        } else {
-            invoice.token.clone()
-        };
-        // initialize() pushes token then xlm_token, so xlm is at index 1 when present
-        let xlm_addr = if token_list.len() > 1 {
-            token_list.get(1).unwrap()
-        } else {
-            invoice.token.clone()
-        };
-        add_volume(&env, &invoice.token, fund_amount, &usdc_addr, &eurc_addr, &xlm_addr);
-=======
         add_volume(&env, &invoice.token, fund_amount);
->>>>>>> upstream/main
 
         notify_distribution_funding(&env, &funder, fund_amount);
 
@@ -2031,11 +1978,8 @@ impl InvoiceLiquidityContract {
         decay_period_ledgers: u64,
         dispute_timeout_ledgers: u64,
         xlm_sac_address: Address,
-<<<<<<< HEAD
-=======
         usdc_sac_address: Address,
         eurc_sac_address: Address,
->>>>>>> upstream/main
     ) -> Result<(), ContractError> {
         crate::config::update_config(
             &env,
@@ -2047,11 +1991,8 @@ impl InvoiceLiquidityContract {
             decay_period_ledgers,
             dispute_timeout_ledgers,
             xlm_sac_address,
-<<<<<<< HEAD
-=======
             usdc_sac_address,
             eurc_sac_address,
->>>>>>> upstream/main
         )
         .map_err(|_| ContractError::Unauthorized)
     }
@@ -2219,12 +2160,8 @@ fn validate_invoice_terms(
     due_date: u64,
     discount_rate: u32,
 ) -> Result<(), ContractError> {
-    if amount <= 0 {
+    if amount < 1_000_000 {
         return Err(ContractError::InvalidAmount);
-    }
-
-    if amount < MIN_INVOICE_AMOUNT {
-        return Err(ContractError::AmountTooSmall);
     }
 
     let max_rate: u32 = env

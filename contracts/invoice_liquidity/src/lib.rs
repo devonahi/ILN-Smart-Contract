@@ -12,6 +12,7 @@ mod tests_lp_pagination;
 mod tests_new_features;
 mod tests_pagination;
 mod tests_regression;
+mod tests_reentrancy;
 mod tests_xlm_support;
 
 pub use crate::invoice::{
@@ -45,6 +46,7 @@ use invoice::{
     set_min_payer_reputation, set_paused, set_payer_score, try_load_invoice, ContractStats,
     DisputeRecord, StorageKey,
 };
+use storage::with_reentrancy_guard;
 // 30-day window in seconds for a payer to file an appeal after a default.
 const APPEAL_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
 
@@ -720,9 +722,9 @@ impl InvoiceLiquidityContract {
         Ok(best_lp)
     }
 
-    // ------------------------------------------------------------
-    // fund_invoice (USES invoice.token) — now queue-aware
-    // ------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // fund_invoice (USES invoice.token) — now queue-aware & reentrancy-guarded
+    // ────────────────────────────────────────────────────────────
     /// Access: LP only
     pub fn fund_invoice(
         env: Env,
@@ -730,18 +732,316 @@ impl InvoiceLiquidityContract {
         invoice_id: u64,
         fund_amount: i128,
     ) -> Result<(), ContractError> {
+        with_reentrancy_guard(&env, || {
+            if is_paused(&env) {
+                return Err(ContractError::ContractPaused);
+            }
+
+            require_lp(&env, &funder)?;
+
+            // Issue #71: load the invoice once instead of `invoice_exists` + `load_invoice`
+            // (which read the same persistent key twice on the hottest path).
+            let mut invoice =
+                try_load_invoice(&env, invoice_id).ok_or(ContractError::InvoiceNotFound)?;
+
+            // ── Issue #34: priority queue check ──────────────────────
+            // If a queue has been resolved, only the approved LP may fund.
+            if let Some(approved) = get_queue_resolution(&env, invoice_id) {
+                if approved != funder {
+                    return Err(ContractError::NotApprovedFunder);
+                }
+            }
+
+            // Issue #19: the invoice token must still be on the governance allowlist.
+            if !is_approved_token(&env, &invoice.token) {
+                return Err(ContractError::Unauthorized);
+            }
+
+            // Issue #28: reject funding when the payer's reputation is below the
+            // configured minimum threshold (default 0 allows everyone).
+            let min_payer_reputation = get_min_payer_reputation(&env);
+            if min_payer_reputation > 0
+                && get_payer_score(&env, &invoice.payer) < min_payer_reputation
+            {
+                return Err(ContractError::PayerReputationTooLow);
+            }
+
+            if invoice.status == InvoiceStatus::Pending
+                && env.ledger().timestamp() >= u64::from(invoice.due_date)
+            {
+                invoice.status = InvoiceStatus::Expired;
+                save_invoice(&env, &invoice);
+                return Err(ContractError::InvoiceExpired);
+            }
+
+            match invoice.status {
+                InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+                InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+                InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+                InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+                InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+                InvoiceStatus::Funded => return Err(ContractError::AlreadyFunded),
+                InvoiceStatus::Pending | InvoiceStatus::PartiallyFunded => {} // all good
+                InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+            }
+
+            if invoice.amount_funded + fund_amount > invoice.amount {
+                return Err(ContractError::OverfundingRejected);
+            }
+
+            // --- Execute transfer ---
+            let token = token_client(&env, &invoice.token);
+            let contract_address = env.current_contract_address();
+
+            // Handle XLM precision if needed (SAC wrapper handles conversion internally)
+            let normalized_fund_amount = if is_xlm_token(&env, &invoice.token) {
+                normalize_xlm_amount(fund_amount)
+            } else {
+                normalize_usdc_amount(fund_amount)
+            };
+
+            let fund_discount = normalized_fund_amount
+                .checked_mul(discount_rate_as_i128(invoice.discount_rate))
+                .unwrap_or(0)
+                / 10_000;
+            let cost = normalized_fund_amount - fund_discount;
+
+            token.transfer(&funder, &contract_address, &cost);
+
+            // --- Update contributor list ---
+            let mut funders = get_invoice_funders(&env, invoice_id);
+            let mut found = false;
+            for i in 0..funders.len() {
+                let (addr, amt) = funders.get(i).unwrap();
+                if addr == funder {
+                    funders.set(i, (addr, amt + fund_amount));
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                funders.push_back((funder.clone(), fund_amount));
+            }
+            save_invoice_funders(&env, invoice_id, &funders);
+
+            // --- Update invoice state ---
+            invoice.amount_funded += fund_amount;
+
+            if invoice.amount_funded == invoice.amount {
+                // Fully funded — pay out to freelancer
+                let discount_amount = invoice
+                    .amount
+                    .checked_mul(discount_rate_as_i128(invoice.discount_rate))
+                    .unwrap_or(0)
+                    / 10_000;
+                let freelancer_payout = invoice.amount - discount_amount;
+
+                token.transfer(&contract_address, &invoice.freelancer, &freelancer_payout);
+
+                invoice.status = InvoiceStatus::Funded;
+                invoice.funded_at = Some(env.ledger().timestamp().try_into().unwrap());
+                invoice.funder = Some(funder.clone());
+
+                // Boost LP score on successful funding
+                let current_lp_score = get_lp_score(&env, &funder);
+                set_lp_score(&env, &funder, current_lp_score + 1);
+            } else {
+                invoice.status = InvoiceStatus::PartiallyFunded;
+            }
+
+            save_invoice(&env, &invoice);
+
+            // Update LP index
+            add_invoice_to_lp(&env, &funder, invoice_id);
+
+            // Increment total funded counter if fully funded
+            if invoice.status == InvoiceStatus::Funded {
+                increment_total_funded(&env);
+            }
+
+            add_volume(&env, &invoice.token, fund_amount);
+
+            notify_distribution_funding(&env, &funder, fund_amount);
+
+            let now = env.ledger().timestamp();
+
+            let seconds_to_due = if u64::from(invoice.due_date) > now {
+                u64::from(invoice.due_date) - now
+            } else {
+                0
+            };
+
+            let days_to_due = seconds_to_due / (24 * 60 * 60);
+
+            let effective_yield_bps = ((invoice.discount_rate as u64 * days_to_due) / 365) as u32;
+
+            env.events().publish_event(&InvoiceFunded {
+                invoice_id: invoice.id,
+                funder: funder.clone(),
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                fund_amount,
+                amount_funded: invoice.amount_funded,
+                invoice_amount: invoice.amount,
+                due_date: u64::from(invoice.due_date),
+                discount_rate: invoice.discount_rate,
+                funded_at: invoice.funded_at.map(|ts| ts.into()),
+                status: invoice.status.clone(),
+
+                // NEW
+                lp: funder.clone(),
+                effective_yield_bps,
+                timestamp: now,
+            });
+
+            Ok(())
+        })
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // transfer_invoice
+    // ────────────────────────────────────────────────────────────
+    /// Access: Submitter only
+    pub fn transfer_invoice(
+        env: Env,
+        invoice_id: u64,
+        new_freelancer: Address,
+    ) -> Result<(), ContractError> {
         if is_paused(&env) {
             return Err(ContractError::ContractPaused);
         }
 
-        require_lp(&env, &funder)?;
+        if !invoice_exists(&env, invoice_id) {
+            return Err(ContractError::InvoiceNotFound);
+        }
 
-        // Issue #71: load the invoice once instead of `invoice_exists` + `load_invoice`
-        // (which read the same persistent key twice on the hottest path).
-        let mut invoice =
-            try_load_invoice(&env, invoice_id).ok_or(ContractError::InvoiceNotFound)?;
+        let mut invoice = load_invoice(&env, invoice_id);
 
-        // ── Issue #34: priority queue check ──────────────────────
+        require_submitter_by_id(&env, &invoice.freelancer, invoice_id)?;
+
+        match invoice.status {
+            InvoiceStatus::Pending => {}
+            InvoiceStatus::PartiallyFunded | InvoiceStatus::Funded => {
+                return Err(ContractError::AlreadyFunded)
+            }
+            InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+            InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+            InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+            InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+            InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+            InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+        }
+
+        let old_freelancer = invoice.freelancer.clone();
+        invoice.freelancer = new_freelancer.clone();
+
+        save_invoice(&env, &invoice);
+
+        // Update submitter index
+        remove_invoice_from_submitter(&env, &old_freelancer, invoice_id);
+        add_invoice_to_submitter(&env, &new_freelancer, invoice_id);
+
+        env.events().publish_event(&InvoiceTransferred {
+            invoice_id,
+            old_freelancer,
+            new_freelancer,
+            status: invoice.status.clone(),
+        });
+
+        Ok(())
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // cancel_invoice
+    // ────────────────────────────────────────────────────────────
+    /// Access: Submitter only
+    pub fn cancel_invoice(env: Env, invoice_id: u64) -> Result<(), ContractError> {
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+
+        if !invoice_exists(&env, invoice_id) {
+            return Err(ContractError::InvoiceNotFound);
+        }
+
+        let mut invoice = load_invoice(&env, invoice_id);
+
+        require_submitter_by_id(&env, &invoice.freelancer, invoice_id)?;
+
+        match invoice.status {
+            InvoiceStatus::Pending => {}
+            InvoiceStatus::PartiallyFunded => {
+                let funders = get_invoice_funders(&env, invoice_id);
+                let token = token_client(&env, &invoice.token);
+                let contract_address = env.current_contract_address();
+                for i in 0..funders.len() {
+                    let (funder_addr, fund_amt) = funders.get(i).unwrap();
+                    let fund_discount = fund_amt
+                        .checked_mul(discount_rate_as_i128(invoice.discount_rate))
+                        .unwrap_or(0)
+                        / 10_000;
+                    let refund = fund_amt - fund_discount;
+                    token.transfer(&contract_address, &funder_addr, &refund);
+                }
+            }
+            InvoiceStatus::Funded => return Err(ContractError::AlreadyFunded),
+            InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+            InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+            InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+            InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+            InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+            InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+        }
+
+        invoice.status = InvoiceStatus::Cancelled;
+
+        save_invoice(&env, &invoice);
+
+        env.events().publish_event(&InvoiceCancelled {
+            invoice_id,
+            freelancer: invoice.freelancer.clone(),
+            status: invoice.status.clone(),
+        });
+
+        Ok(())
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // expire_invoice
+    // ────────────────────────────────────────────────────────────
+    /// Access: Anyone
+    pub fn expire_invoice(env: Env, invoice_id: u64) -> Result<(), ContractError> {
+        if !invoice_exists(&env, invoice_id) {
+            return Err(ContractError::InvoiceNotFound);
+        }
+
+        let mut invoice = load_invoice(&env, invoice_id);
+
+        if env.ledger().timestamp() < u64::from(invoice.due_date) {
+            return Err(ContractError::NotYetDefaulted);
+        }
+
+        match invoice.status {
+            InvoiceStatus::Pending => {
+                invoice.status = InvoiceStatus::Expired;
+                save_invoice(&env, &invoice);
+                Ok(())
+            }
+            InvoiceStatus::PartiallyFunded | InvoiceStatus::Funded => {
+                Err(ContractError::AlreadyFunded)
+            }
+            InvoiceStatus::Paid => Err(ContractError::AlreadyPaid),
+            InvoiceStatus::Defaulted => Err(ContractError::InvoiceDefaulted),
+            InvoiceStatus::Appealed => Err(ContractError::InvoiceAppealed),
+            InvoiceStatus::Disputed => Err(ContractError::InvoiceDisputed),
+            InvoiceStatus::Expired => Err(ContractError::InvoiceExpired),
+            InvoiceStatus::Cancelled => Err(ContractError::AlreadyCancelled),
+        }
+    }
+
+    // ────────────────────────────────────────────────────────────
+    // ── Issue #34: priority queue check ──────────────────────
         // If a queue has been resolved, only the approved LP may fund.
         if let Some(approved) = get_queue_resolution(&env, invoice_id) {
             if approved != funder {
@@ -892,7 +1192,8 @@ impl InvoiceLiquidityContract {
             timestamp: now,
         });
 
-        Ok(())
+            Ok(())
+        })
     }
 
     // ------------------------------------------------------------
@@ -1036,151 +1337,153 @@ impl InvoiceLiquidityContract {
         }
     }
 
-    // ------------------------------------------------------------
-    // mark_paid (USES invoice.token)
-    // ------------------------------------------------------------
+    // ────────────────────────────────────────────────────────────
+    // mark_paid (USES invoice.token) — reentrancy-guarded
+    // ────────────────────────────────────────────────────────────
     /// Access: Payer only
     pub fn mark_paid(env: Env, invoice_id: u64, amount: i128) -> Result<(), ContractError> {
-        if is_paused(&env) {
-            return Err(ContractError::ContractPaused);
-        }
-
-        if amount <= 0 {
-            return Err(ContractError::InvalidAmount);
-        }
-
-        // Issue #71: single load instead of `invoice_exists` + `load_invoice`.
-        let mut invoice =
-            try_load_invoice(&env, invoice_id).ok_or(ContractError::InvoiceNotFound)?;
-
-        require_payer_by_id(&env, invoice_id)?;
-
-        match invoice.status {
-            InvoiceStatus::Pending | InvoiceStatus::PartiallyFunded => {
-                return Err(ContractError::NotFunded)
+        with_reentrancy_guard(&env, || {
+            if is_paused(&env) {
+                return Err(ContractError::ContractPaused);
             }
-            InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
-            InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
-            InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
-            InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
-            InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
-            InvoiceStatus::Funded => {}
-            InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
-        }
 
-        let remaining = invoice.amount - invoice.amount_paid;
-        if amount > remaining {
-            return Err(ContractError::OverpaymentRejected);
-        }
+            if amount <= 0 {
+                return Err(ContractError::InvalidAmount);
+            }
 
-        let funders = get_invoice_funders(&env, invoice_id);
-        if funders.len() == 0 {
-            return Err(ContractError::NotFunded);
-        }
+            // Issue #71: single load instead of `invoice_exists` + `load_invoice`.
+            let mut invoice =
+                try_load_invoice(&env, invoice_id).ok_or(ContractError::InvoiceNotFound)?;
 
-        let token = token_client(&env, &invoice.token);
-        let contract_address = env.current_contract_address();
+            require_payer_by_id(&env, invoice_id)?;
 
-        // Handle XLM precision if needed (SAC wrapper handles conversion internally)
-        let normalized_amount = if is_xlm_token(&env, &invoice.token) {
-            normalize_xlm_amount(amount)
-        } else {
-            normalize_usdc_amount(amount)
-        };
+            match invoice.status {
+                InvoiceStatus::Pending | InvoiceStatus::PartiallyFunded => {
+                    return Err(ContractError::NotFunded)
+                }
+                InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+                InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+                InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+                InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+                InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+                InvoiceStatus::Funded => {}
+                InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+            }
 
-        // Payer sends partial/full amount to the contract
-        token.transfer(&invoice.payer, &contract_address, &normalized_amount);
+            let remaining = invoice.amount - invoice.amount_paid;
+            if amount > remaining {
+                return Err(ContractError::OverpaymentRejected);
+            }
 
-        invoice.amount_paid += amount;
+            let funders = get_invoice_funders(&env, invoice_id);
+            if funders.len() == 0 {
+                return Err(ContractError::NotFunded);
+            }
 
-        // If not fully paid, save and emit partial event
-        if invoice.amount_paid < invoice.amount {
-            save_invoice(&env, &invoice);
-            env.events().publish_event(&InvoicePartiallyPaid {
-                invoice_id: invoice.id,
-                payer: invoice.payer.clone(),
-                amount_paid_now: amount,
-                total_amount_paid: invoice.amount_paid,
-                remaining_amount: invoice.amount - invoice.amount_paid,
-            });
-            return Ok(());
-        }
+            let token = token_client(&env, &invoice.token);
+            let contract_address = env.current_contract_address();
 
-        // --- FULL PAYMENT LOGIC ---
-        // Calculate protocol fee and deduct it
-        let fee_rate: u32 = env
-            .storage()
-            .instance()
-            .get(&crate::storage::DataKey::FeeRate)
-            .unwrap_or(0);
-        let protocol_fee = invoice.amount.checked_mul(fee_rate as i128).unwrap_or(0) / 10_000;
+            // Handle XLM precision if needed (SAC wrapper handles conversion internally)
+            let normalized_amount = if is_xlm_token(&env, &invoice.token) {
+                normalize_xlm_amount(amount)
+            } else {
+                normalize_usdc_amount(amount)
+            };
 
-        if protocol_fee > 0 {
-            let admin: Address = env
+            // Payer sends partial/full amount to the contract
+            token.transfer(&invoice.payer, &contract_address, &normalized_amount);
+
+            invoice.amount_paid += amount;
+
+            // If not fully paid, save and emit partial event
+            if invoice.amount_paid < invoice.amount {
+                save_invoice(&env, &invoice);
+                env.events().publish_event(&InvoicePartiallyPaid {
+                    invoice_id: invoice.id,
+                    payer: invoice.payer.clone(),
+                    amount_paid_now: amount,
+                    total_amount_paid: invoice.amount_paid,
+                    remaining_amount: invoice.amount - invoice.amount_paid,
+                });
+                return Ok(());
+            }
+
+            // --- FULL PAYMENT LOGIC ---
+            // Calculate protocol fee and deduct it
+            let fee_rate: u32 = env
                 .storage()
                 .instance()
-                .get(&crate::storage::DataKey::Admin)
-                .unwrap();
-            token.transfer(&contract_address, &admin, &protocol_fee);
-        }
+                .get(&crate::storage::DataKey::FeeRate)
+                .unwrap_or(0);
+            let protocol_fee = invoice.amount.checked_mul(fee_rate as i128).unwrap_or(0) / 10_000;
 
-        let distribute_amount = invoice.amount - protocol_fee;
-
-        // Legacy compatibility: use first LP for event emission
-        let primary_lp = funders.get(0).unwrap().0.clone();
-
-        // Total amount funded by primary LP
-        let primary_lp_funded = funders.get(0).unwrap().1;
-
-        // LP payout after settlement distribution
-        let primary_lp_payout = distribute_amount
-            .checked_mul(primary_lp_funded)
-            .unwrap_or(0)
-            / invoice.amount;
-
-        // LP earnings
-        let lp_earned = primary_lp_payout - primary_lp_funded;
-
-        // Distribute proportionally to funders
-        for i in 0..funders.len() {
-            let (funder_addr, fund_amt) = funders.get(i).unwrap();
-            let funder_share =
-                distribute_amount.checked_mul(fund_amt).unwrap_or(0) / invoice.amount;
-            if funder_share > 0 {
-                token.transfer(&contract_address, &funder_addr, &funder_share);
+            if protocol_fee > 0 {
+                let admin: Address = env
+                    .storage()
+                    .instance()
+                    .get(&crate::storage::DataKey::Admin)
+                    .unwrap();
+                token.transfer(&contract_address, &admin, &protocol_fee);
             }
-        }
 
-        // ---- Update invoice ----
-        invoice.status = InvoiceStatus::Paid;
+            let distribute_amount = invoice.amount - protocol_fee;
 
-        save_invoice(&env, &invoice);
+            // Legacy compatibility: use first LP for event emission
+            let primary_lp = funders.get(0).unwrap().0.clone();
 
-        // Increment total paid counter
-        increment_total_paid(&env);
+            // Total amount funded by primary LP
+            let primary_lp_funded = funders.get(0).unwrap().1;
 
-        let paid_on_time = env.ledger().timestamp() <= u64::from(invoice.due_date);
-        notify_distribution_settlement(&env, &invoice.freelancer, &invoice.payer, paid_on_time);
+            // LP payout after settlement distribution
+            let primary_lp_payout = distribute_amount
+                .checked_mul(primary_lp_funded)
+                .unwrap_or(0)
+                / invoice.amount;
 
-        // --- Update payer reputation ---
-        let current_score = get_payer_score(&env, &invoice.payer);
-        set_payer_score(&env, &invoice.payer, current_score + 1);
+            // LP earnings
+            let lp_earned = primary_lp_payout - primary_lp_funded;
 
-        env.events().publish_event(&InvoicePaid {
-            invoice_id: invoice.id,
-            payer: invoice.payer.clone(),
-            lp: primary_lp,
-            freelancer: invoice.freelancer.clone(),
-            token: invoice.token.clone(),
-            amount_paid: invoice.amount,
-            lp_earned,
-            lp_payout: primary_lp_payout,
-            settlement_timestamp: env.ledger().timestamp(),
-            paid_on_time,
-            status: invoice.status.clone(),
-        });
+            // Distribute proportionally to funders
+            for i in 0..funders.len() {
+                let (funder_addr, fund_amt) = funders.get(i).unwrap();
+                let funder_share =
+                    distribute_amount.checked_mul(fund_amt).unwrap_or(0) / invoice.amount;
+                if funder_share > 0 {
+                    token.transfer(&contract_address, &funder_addr, &funder_share);
+                }
+            }
 
-        Ok(())
+            // ---- Update invoice ----
+            invoice.status = InvoiceStatus::Paid;
+
+            save_invoice(&env, &invoice);
+
+            // Increment total paid counter
+            increment_total_paid(&env);
+
+            let paid_on_time = env.ledger().timestamp() <= u64::from(invoice.due_date);
+            notify_distribution_settlement(&env, &invoice.freelancer, &invoice.payer, paid_on_time);
+
+            // --- Update payer reputation ---
+            let current_score = get_payer_score(&env, &invoice.payer);
+            set_payer_score(&env, &invoice.payer, current_score + 1);
+
+            env.events().publish_event(&InvoicePaid {
+                invoice_id: invoice.id,
+                payer: invoice.payer.clone(),
+                lp: primary_lp,
+                freelancer: invoice.freelancer.clone(),
+                token: invoice.token.clone(),
+                amount_paid: invoice.amount,
+                lp_earned,
+                lp_payout: primary_lp_payout,
+                settlement_timestamp: env.ledger().timestamp(),
+                paid_on_time,
+                status: invoice.status.clone(),
+            });
+
+            Ok(())
+        })
     }
 
     // ----------------------------------------------------------------

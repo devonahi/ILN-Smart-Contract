@@ -15,6 +15,8 @@ pub enum DataKey {
     Paused,
     /// Minimum payer reputation required to fund an invoice (Issue #28). Default 0.
     MinPayerReputation,
+    /// Reentrancy guard lock flag
+    ReentrancyLock,
 
     // Persistent Storage
     Invoice(u64),
@@ -359,4 +361,34 @@ pub fn add_volume(
             .persistent()
             .set(&DataKey::TotalVolumeXlm, &(current + amount));
     }
+}
+
+// ----------------------------------------------------------------
+// Reentrancy Guard
+// ----------------------------------------------------------------
+
+use crate::errors::ContractError;
+
+/// Calls the provided closure with a reentrancy lock set in instance storage.
+/// Returns Error::Reentrancy if already locked.
+pub fn with_reentrancy_guard<F, R>(env: &Env, f: F) -> Result<R, ContractError>
+where
+    F: FnOnce() -> Result<R, ContractError>,
+{
+    let locked: bool = env
+        .storage()
+        .instance()
+        .get(&DataKey::ReentrancyLock)
+        .unwrap_or(false);
+    if locked {
+        return Err(ContractError::Reentrancy);
+    }
+    env.storage()
+        .instance()
+        .set(&DataKey::ReentrancyLock, &true);
+    let result = f();
+    env.storage()
+        .instance()
+        .set(&DataKey::ReentrancyLock, &false);
+    result
 }

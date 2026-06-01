@@ -43,4 +43,6 @@ pub enum ContractError {
     OverpaymentRejected = 30,
     /// Issue #28: payer's reputation is below the configured minimum threshold.
     PayerReputationTooLow = 31,
+    /// Reentrancy guard: function called while already executing.
+    Reentrancy = 32,
 }

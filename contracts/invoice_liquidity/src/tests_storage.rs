@@ -2,9 +2,8 @@
 
 use super::*;
 use crate::invoice::InvoiceStatus;
-use crate::storage::DataKey;
 use soroban_sdk::{
-    testutils::{storage::Persistent, Address as _, Ledger},
+    testutils::{storage::Persistent, storage::Instance as _, Address as _, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env,
 };
@@ -75,13 +74,11 @@ fn test_submit_invoice_sets_ttl() {
 
     // Check that TTL is set
     assert!(ttl > 0);
-
-    // Verify InvoiceCount TTL as well
-    let count_key = crate::storage::DataKey::InvoiceCount;
-    let count_ttl = t.env.as_contract(&t.contract.address, || {
-        t.env.storage().persistent().get_ttl(&count_key)
+    // Verify aggregate stats TTL as well
+    let stats_ttl = t.env.as_contract(&t.contract.address, || {
+        t.env.storage().instance().get_ttl()
     });
-    assert!(count_ttl > 0);
+    assert!(stats_ttl > 0);
 }
 
 #[test]

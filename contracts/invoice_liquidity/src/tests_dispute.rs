@@ -18,7 +18,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     Address, BytesN, Env,
 };
@@ -27,6 +27,7 @@ const INVOICE_AMOUNT: i128 = 1_000_000_000;
 const DISCOUNT_RATE: u32 = 300;
 const DUE_DATE_OFFSET: u64 = 60 * 60 * 24 * 30; // 30 days
 
+#[allow(dead_code)]
 struct DisputeTestEnv {
     env: Env,
     contract: InvoiceLiquidityContractClient<'static>,
@@ -247,7 +248,7 @@ fn test_non_payer_cannot_dispute() {
     );
 
     // Freelancer tries to dispute their own invoice
-    let result = t.contract.try_dispute_invoice(&id, &reason_hash(&t.env));
+    let _result = t.contract.try_dispute_invoice(&id, &reason_hash(&t.env));
     // require_payer_by_id will fail auth check because t.freelancer didn't sign as payer
     // Actually, require_payer_by_id(env, id) calls invoice.payer.require_auth()
     // In tests with mock_all_auths(), it will succeed if we don't specify the caller.
@@ -258,6 +259,10 @@ fn test_non_payer_cannot_dispute() {
 fn test_auto_resolve_dispute_timeout_behavior() {
     let t = setup_dispute();
 
+    let xlm_sac_address = t.env.as_contract(&t.contract.address, || {
+        crate::storage::get_config(&t.env).unwrap().xlm_sac_address
+    });
+
     let config = Config {
         high_rep_threshold: 80,
         bonus_bps: 200,
@@ -265,7 +270,7 @@ fn test_auto_resolve_dispute_timeout_behavior() {
         decay_rate_bps: 100,
         decay_period_ledgers: 1000,
         dispute_timeout_ledgers: 100,
-        xlm_sac_address: Address::generate(&t.env),
+        xlm_sac_address,
         price_oracle: None,
     };
     t.env.as_contract(&t.contract.address, || {

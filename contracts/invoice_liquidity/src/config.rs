@@ -1,4 +1,3 @@
-use crate::errors::ContractError;
 use crate::events::ParameterUpdated;
 use soroban_sdk::{contracttype, Address, Env, Symbol};
 
@@ -24,6 +23,7 @@ pub enum ConfigError {
 
 const MAX_BONUS_BPS: u32 = 500;
 
+#[allow(clippy::too_many_arguments)]
 pub fn update_config(
     env: &Env,
     caller: &Address,
@@ -102,14 +102,9 @@ pub fn update_config(
     Ok(())
 }
 
-pub fn set_price_oracle(
-    env: &Env,
-    caller: &Address,
-    oracle: Address,
-) -> Result<(), ConfigError> {
+pub fn set_price_oracle(env: &Env, caller: &Address, oracle: Address) -> Result<(), ConfigError> {
     let admin = crate::storage::get_admin(env).ok_or(ConfigError::Unauthorized)?;
     let mut config = crate::storage::get_config(env).ok_or(ConfigError::Unauthorized)?;
-    caller.require_auth();
     if caller != &admin {
         return Err(ConfigError::Unauthorized);
     }

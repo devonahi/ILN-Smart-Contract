@@ -47,6 +47,8 @@ pub enum DataKey {
     Dispute(u64),
     SubmitterInvoices(Address),
     LpInvoices(Address),
+    /// Fixed-size min-heap of the top payers by reputation score (Issue #77).
+    TopPayersHeap,
 }
 
 // ----------------------------------------------------------------

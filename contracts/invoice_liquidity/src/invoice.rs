@@ -1,5 +1,5 @@
 pub use crate::storage::DataKey as StorageKey;
-use soroban_sdk::{contracttype, Address, BytesN, Env, Symbol, IntoVal};
+use soroban_sdk::{contracttype, Address, BytesN, Env, IntoVal, Symbol};
 
 // ----------------------------------------------------------------
 // Status enum — tracks lifecycle of invoice
@@ -94,16 +94,6 @@ pub struct ContractStats {
 
 impl Default for ContractStats {
     fn default() -> Self {
-        // We need an Env to create a Vec, but Default::default() doesn't have one.
-        // This is a problem for contracttypes with Vec.
-        // However, we only use Default in unwrap_or_default() where we might not have it.
-        // Actually, soroban_sdk::Vec DOES NOT implement Default.
-        // I'll change unwrap_or_default() to unwrap_or(ContractStats::new(&env))
-        // or just use a dummy value if env is not available?
-        // Wait, Soroban's Vec::new(env) requires env.
-        
-        // Let's change the approach: don't use Default for ContractStats.
-        // Instead, use a custom constructor.
         panic!("Use ContractStats::empty(env) instead of Default")
     }
 }
@@ -146,6 +136,13 @@ pub struct DisputeRecord {
     pub disputed_at: u32,
 }
 
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct TopPayerEntry {
+    pub address: Address,
+    pub score: u32,
+}
+
 // ----------------------------------------------------------------
 // Issue #34: Single entry in the LP priority queue
 // ----------------------------------------------------------------
@@ -184,7 +181,16 @@ pub fn remove_invoice_from_submitter(env: &Env, submitter: &Address, invoice_id:
         }
     }
     let key = StorageKey::SubmitterInvoices(submitter.clone());
-    env.storage().persistent().set(&key, &new_invoices);
+    if new_invoices.is_empty() {
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    } else {
+        env.storage().persistent().set(&key, &new_invoices);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 1_000_000, 2_000_000);
+    }
 }
 
 pub fn get_lp_invoices(env: &Env, lp: &Address) -> soroban_sdk::Vec<u64> {
@@ -266,24 +272,56 @@ pub fn get_payer_score(env: &Env, payer: &Address) -> u32 {
                         decayed_score = decayed_score.saturating_sub(decay_amount);
                     }
 
-                    rep.score = (decayed_score.min(100)) as u32;
+                    let new_score = (decayed_score.min(100)) as u32;
+                    if new_score != rep.score {
+                        rep.score = new_score;
+                        rep.last_activity_ledger = current_ledger;
+                        env.storage()
+                            .persistent()
+                            .set(&StorageKey::PayerScore(payer.clone()), &rep);
+
+                        // Sync with ReputationProfile and trigger event
+                        let mut profile = get_reputation(env, payer);
+                        profile.score = new_score;
+                        set_reputation(env, &profile);
+                    }
                 }
             }
             rep.score
         }
-        None => 50,
+        None => crate::constants::DEFAULT_PAYER_SCORE,
     }
+}
+
+fn payer_score_key(payer: &Address) -> StorageKey {
+    StorageKey::PayerScore(payer.clone())
 }
 
 pub fn set_payer_score(env: &Env, payer: &Address, score: u32) {
     let score = score.min(100);
-    let rep = ReputationScore {
-        score,
-        last_activity_ledger: env.ledger().sequence(),
-    };
-    env.storage()
-        .persistent()
-        .set(&StorageKey::PayerScore(payer.clone()), &rep);
+    let key = payer_score_key(payer);
+    let old_score = get_payer_score(env, payer);
+
+    if score == crate::constants::DEFAULT_PAYER_SCORE {
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    } else {
+        let rep = ReputationScore {
+            score,
+            last_activity_ledger: env.ledger().sequence(),
+        };
+        env.storage().persistent().set(&key, &rep);
+    }
+
+    // Sync with ReputationProfile so they are completely aligned
+    let mut profile = get_reputation(env, payer);
+    profile.score = score;
+    set_reputation(env, &profile);
+
+    if old_score != score {
+        crate::top_payers::update_top_payers_on_score_change(env, payer, score);
+    }
 }
 
 pub fn get_reputation(env: &Env, address: &Address) -> ReputationProfile {
@@ -301,21 +339,96 @@ pub fn get_reputation(env: &Env, address: &Address) -> ReputationProfile {
 
 pub fn set_reputation(env: &Env, profile: &ReputationProfile) {
     let key = StorageKey::Reputation(profile.address.clone());
-    env.storage().persistent().set(&key, profile);
+    let old_profile = get_reputation(env, &profile.address);
+    let old_score = old_profile.score;
+    let new_score = profile.score;
+
+    let is_empty = profile.invoices_submitted == 0
+        && profile.invoices_paid == 0
+        && profile.invoices_defaulted == 0
+        && profile.score == 0;
+
+    if is_empty {
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    } else {
+        env.storage().persistent().set(&key, profile);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 1_000_000, 2_000_000);
+    }
+
+    if old_score != new_score
+        || old_profile.invoices_submitted != profile.invoices_submitted
+        || old_profile.invoices_paid != profile.invoices_paid
+        || old_profile.invoices_defaulted != profile.invoices_defaulted
+    {
+        env.events().publish_event(&crate::events::ReputationUpdated {
+            address: profile.address.clone(),
+            old_score,
+            new_score,
+            invoices_submitted: profile.invoices_submitted,
+            invoices_paid: profile.invoices_paid,
+            invoices_defaulted: profile.invoices_defaulted,
+        });
+    }
+}
+
+pub fn increment_invoices_submitted(env: &Env, address: &Address) {
+    let mut profile = get_reputation(env, address);
+    profile.invoices_submitted += 1;
+    set_reputation(env, &profile);
+}
+
+pub fn increment_invoices_paid(env: &Env, address: &Address) {
+    let mut profile = get_reputation(env, address);
+    profile.invoices_paid += 1;
+    set_reputation(env, &profile);
+}
+
+pub fn increment_invoices_defaulted(env: &Env, address: &Address) {
+    let mut profile = get_reputation(env, address);
+    profile.invoices_defaulted += 1;
+    set_reputation(env, &profile);
+}
+
+pub fn get_invoice_funders(env: &Env, id: u64) -> soroban_sdk::Vec<(Address, i128)> {
+    env.storage()
+        .persistent()
+        .get(&StorageKey::InvoiceFunders(id))
+        .unwrap_or(soroban_sdk::Vec::new(env))
+}
+
+pub fn save_invoice_funders(env: &Env, id: u64, funders: &soroban_sdk::Vec<(Address, i128)>) {
+    let key = StorageKey::InvoiceFunders(id);
+    if funders.is_empty() {
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    } else {
+        env.storage().persistent().set(&key, funders);
+    }
 }
 
 pub fn get_lp_score(env: &Env, lp: &Address) -> u32 {
     env.storage()
         .persistent()
         .get(&StorageKey::LpScore(lp.clone()))
-        .unwrap_or(50)
+        .unwrap_or(crate::constants::DEFAULT_LP_SCORE)
 }
 
 pub fn set_lp_score(env: &Env, lp: &Address, score: u32) {
     let score = score.min(100);
-    env.storage()
-        .persistent()
-        .set(&StorageKey::LpScore(lp.clone()), &score);
+    let key = StorageKey::LpScore(lp.clone());
+
+    if score == crate::constants::DEFAULT_LP_SCORE {
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    } else {
+        env.storage().persistent().set(&key, &score);
+    }
 }
 
 // ----------------------------------------------------------------
@@ -390,11 +503,6 @@ pub fn save_dispute(env: &Env, invoice_id: u64, record: &DisputeRecord) {
 // ----------------------------------------------------------------
 
 /// Local accumulator for stat changes to be applied in a single write.
-/// 
-/// OPTIMIZATION: Instead of updating storage counters individually (which costs 
-/// gas for each write), we accumulate all changes for an instruction in this 
-/// struct and apply them as a single write to the `ContractStats` struct 
-/// stored in `instance` storage at the end of the instruction.
 #[derive(Default)]
 pub struct StatsDelta {
     pub total_invoices: u64,
@@ -406,22 +514,42 @@ pub struct StatsDelta {
 }
 
 impl StatsDelta {
-    pub fn add_volume(&mut self, token: &Address, amount: i128, usdc_addr: &Address, eurc_addr: &Address, xlm_addr: &Address) {
-        if token == usdc_addr {
-            self.volume_usdc += amount;
-        } else if token == eurc_addr {
-            self.volume_eurc += amount;
-        } else if token == xlm_addr {
-            self.volume_xlm += amount;
+    pub fn add_volume(&mut self, env: &Env, token: &Address, amount: i128) {
+        if let Some(config) = crate::storage::get_config(env) {
+            if token == &config.xlm_sac_address {
+                self.volume_xlm += amount;
+                return;
+            }
+        }
+        
+        let token_list: soroban_sdk::Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&StorageKey::TokenList)
+            .unwrap_or(soroban_sdk::Vec::new(env));
+
+        if !token_list.is_empty() {
+            if let Some(usdc_addr) = token_list.get(0) {
+                if token == &usdc_addr {
+                    self.volume_usdc += amount;
+                }
+            }
+            if token_list.len() > 2 {
+                if let Some(eurc_addr) = token_list.get(2) {
+                    if token == &eurc_addr {
+                        self.volume_eurc += amount;
+                    }
+                }
+            }
         }
     }
 
     pub fn apply(&self, env: &Env) {
-        if self.total_invoices == 0 && self.total_funded == 0 && self.total_paid == 0 
+        if self.total_invoices == 0 && self.total_funded == 0 && self.total_paid == 0
            && self.volume_usdc == 0 && self.volume_eurc == 0 && self.volume_xlm == 0 {
             return;
         }
-        
+
         let mut stats = get_contract_stats(env);
         stats.total_invoices += self.total_invoices;
         stats.total_funded += self.total_funded;
@@ -429,7 +557,7 @@ impl StatsDelta {
         stats.total_volume_usdc += self.volume_usdc;
         stats.total_volume_eurc += self.volume_eurc;
         stats.total_volume_xlm += self.volume_xlm;
-        
+
         save_contract_stats(env, &stats);
     }
 }

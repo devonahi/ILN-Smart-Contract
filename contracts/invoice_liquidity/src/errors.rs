@@ -25,12 +25,19 @@ pub enum ContractError {
     ContractPaused = 19,
     DueDateTooSoon = 20,
     DueDateTooFar = 21,
+    /// LP has already joined the fund queue for this invoice.
     AlreadyInQueue = 22,
+    /// fund_invoice rejected because a different LP was selected by the priority queue.
     NotApprovedFunder = 23,
+    /// payer's reputation is below the configured minimum threshold.
     PayerReputationTooLow = 24,
+    /// Invoice is in Appealed state and cannot be acted upon yet.
     InvoiceAppealed = 25,
+    /// Payer attempted to appeal an invoice that is already in Appealed state.
     AlreadyAppealed = 26,
+    /// Appeal window has closed; appeal can no longer be submitted.
     AppealWindowClosed = 27,
+    /// Action requires the invoice to be in Defaulted state.
     NotDefaulted = 28,
     AlreadyDisputed = 29,
     NotDisputed = 30,

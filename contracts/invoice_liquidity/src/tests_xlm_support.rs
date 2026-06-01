@@ -9,14 +9,13 @@
 //! - Volume tracking for XLM
 
 #![cfg(test)]
+// Test setup often destructures tuples where only some bindings are used.
+#![allow(dead_code, unused_variables)]
 
 use super::*;
-use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 use soroban_sdk::testutils::Address as _;
+use soroban_sdk::token::{Client as TokenClient, StellarAssetClient};
 use soroban_sdk::{Address, Env};
-
-const XLM_DECIMALS: u32 = 7; // 1 XLM = 10,000,000 stroops
-const USDC_DECIMALS: u32 = 6; // 1 USDC = 1,000,000 units
 
 // Test amounts in XLM (7 decimal places)
 const XLM_INVOICE_AMOUNT: i128 = 100_000_000; // 10 XLM
@@ -89,10 +88,9 @@ fn test_submit_invoice_with_xlm_token() {
             &due_date,
             &discount_rate,
             &xlm_address,
-        )
-        .unwrap();
+        );
 
-    let invoice = client.get_invoice(&invoice_id).unwrap();
+    let invoice = client.get_invoice(&invoice_id);
     assert_eq!(invoice.token, xlm_address);
     assert_eq!(invoice.amount, XLM_INVOICE_AMOUNT);
     assert_eq!(invoice.status, InvoiceStatus::Pending);
@@ -117,8 +115,7 @@ fn test_fund_invoice_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
-        )
-        .unwrap();
+        );
 
     // Mint XLM to funder
     let xlm_token = TokenClient::new(&env, &xlm_address);
@@ -127,10 +124,9 @@ fn test_fund_invoice_with_xlm() {
 
     // Fund invoice with XLM
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT)
-        .unwrap();
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
 
-    let invoice = client.get_invoice(&invoice_id).unwrap();
+    let invoice = client.get_invoice(&invoice_id);
     assert_eq!(invoice.status, InvoiceStatus::Funded);
     assert_eq!(invoice.amount_funded, XLM_INVOICE_AMOUNT);
     assert_eq!(invoice.funder, Some(funder.clone()));
@@ -160,24 +156,22 @@ fn test_mark_paid_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
-        )
-        .unwrap();
+        );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
     let xlm_admin = StellarAssetClient::new(&env, &xlm_address);
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
 
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT)
-        .unwrap();
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
 
     // Mint XLM to payer for payment
     xlm_admin.mint(&payer, &XLM_INVOICE_AMOUNT);
 
     // Mark invoice as paid
-    client.mark_paid(&invoice_id, &XLM_INVOICE_AMOUNT).unwrap();
+    client.mark_paid(&invoice_id, &XLM_INVOICE_AMOUNT);
 
-    let invoice = client.get_invoice(&invoice_id).unwrap();
+    let invoice = client.get_invoice(&invoice_id);
     assert_eq!(invoice.status, InvoiceStatus::Paid);
     assert_eq!(invoice.amount_paid, XLM_INVOICE_AMOUNT);
 
@@ -205,8 +199,7 @@ fn test_partial_funding_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
-        )
-        .unwrap();
+        );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
     let xlm_admin = StellarAssetClient::new(&env, &xlm_address);
@@ -214,10 +207,9 @@ fn test_partial_funding_with_xlm() {
 
     // Partially fund with XLM
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_FUND_AMOUNT)
-        .unwrap();
+        .fund_invoice(&funder, &invoice_id, &XLM_FUND_AMOUNT);
 
-    let invoice = client.get_invoice(&invoice_id).unwrap();
+    let invoice = client.get_invoice(&invoice_id);
     assert_eq!(invoice.status, InvoiceStatus::PartiallyFunded);
     assert_eq!(invoice.amount_funded, XLM_FUND_AMOUNT);
 }
@@ -241,16 +233,14 @@ fn test_xlm_volume_tracking() {
             &due_date,
             &discount_rate,
             &xlm_address,
-        )
-        .unwrap();
+        );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
     let xlm_admin = StellarAssetClient::new(&env, &xlm_address);
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
 
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT)
-        .unwrap();
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
 
     // Check that XLM volume is tracked
     let stats = client.get_contract_stats();
@@ -282,13 +272,11 @@ fn test_mixed_token_operations() {
             &due_date,
             &discount_rate,
             &usdc_address,
-        )
-        .unwrap();
+        );
 
     usdc_admin.mint(&funder, &USDC_INVOICE_AMOUNT);
     client
-        .fund_invoice(&funder, &usdc_invoice_id, &USDC_INVOICE_AMOUNT)
-        .unwrap();
+        .fund_invoice(&funder, &usdc_invoice_id, &USDC_INVOICE_AMOUNT);
 
     // Submit XLM invoice
     let xlm_invoice_id = client
@@ -299,13 +287,11 @@ fn test_mixed_token_operations() {
             &due_date,
             &discount_rate,
             &xlm_address,
-        )
-        .unwrap();
+        );
 
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
     client
-        .fund_invoice(&funder, &xlm_invoice_id, &XLM_INVOICE_AMOUNT)
-        .unwrap();
+        .fund_invoice(&funder, &xlm_invoice_id, &XLM_INVOICE_AMOUNT);
 
     // Verify both volumes are tracked correctly
     let stats = client.get_contract_stats();
@@ -332,8 +318,7 @@ fn test_xlm_precision_in_calculations() {
             &due_date,
             &discount_rate,
             &xlm_address,
-        )
-        .unwrap();
+        );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
     let xlm_admin = StellarAssetClient::new(&env, &xlm_address);
@@ -341,10 +326,9 @@ fn test_xlm_precision_in_calculations() {
 
     // Fund and verify discount calculation is correct with 7 decimal precision
     client
-        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT)
-        .unwrap();
+        .fund_invoice(&funder, &invoice_id, &XLM_INVOICE_AMOUNT);
 
-    let invoice = client.get_invoice(&invoice_id).unwrap();
+    let invoice = client.get_invoice(&invoice_id);
 
     // Discount should be: 100,000,000 * 300 / 10,000 = 3,000,000 stroops (0.3 XLM)
     let expected_discount = XLM_INVOICE_AMOUNT * 300 / 10_000;

@@ -290,3 +290,25 @@ pub struct FundQueueResolved {
     /// Winning score that secured priority.
     pub score: u32,
 }
+
+#[contractevent(topics = ["expired"])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct InvoiceExpired {
+    #[topic]
+    pub invoice_id: u64,
+    pub freelancer: Address,
+    pub status: InvoiceStatus,
+}
+
+/// Emitted when an address's reputation score or counters are updated (Issue #32).
+#[contractevent(topics = ["reputation_updated"])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReputationUpdated {
+    #[topic]
+    pub address: Address,
+    pub old_score: u32,
+    pub new_score: u32,
+    pub invoices_submitted: u32,
+    pub invoices_paid: u32,
+    pub invoices_defaulted: u32,
+}

@@ -7,15 +7,15 @@ edition = "2021"
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
-soroban-sdk = { version = "25.3.1" }
+soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 ed25519-dalek = "2.2.0"
 iln_governance = { path = "../iln_governance" }
-proptest = "1"
-rand = "0.10.1"
+proptest = { workspace = true }
+rand = { workspace = true }
 serde_json = "1.0.149"
-soroban-sdk = { version = "25.3.1", features = ["testutils"] }
+soroban-sdk = { workspace = true, features = ["testutils"] }
 
 [[test]]
 name = "multi_token_test"

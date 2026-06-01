@@ -1,0 +1,74 @@
+name: Deploy to Testnet
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+          target: wasm32v1-none
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build contracts
+        run: cargo build --target wasm32v1-none --release
+
+      - name: Install Stellar CLI
+        run: |
+          cargo install --locked stellar-cli --features opt
+
+      - name: Configure Testnet
+        run: |
+          stellar network add --global testnet \
+            --rpc-url https://soroban-testnet.stellar.org \
+            --network-passphrase "Test SDF Network ; September 2015"
+
+      - name: Deploy Contract
+        id: deploy
+        run: |
+          # Create and fund a deployer account
+          stellar keys generate --global deployer
+          DEPLOYER_ADDR=$(stellar keys address deployer)
+          curl -s "https://friendbot.stellar.org?addr=${DEPLOYER_ADDR}"
+          
+          # Deploy invoice_liquidity contract
+          UPLOAD_OUT=$(stellar contract upload --network testnet --source deployer --wasm target/wasm32v1-none/release/invoice_liquidity.wasm)
+          WASM_HASH=$(echo "$UPLOAD_OUT" | grep -oP 'WASM hash: \K[a-f0-9]+' || echo "$UPLOAD_OUT" | grep -oE '[a-f0-9]{64}')
+          
+          DEPLOY_OUT=$(stellar contract deploy --network testnet --source deployer --wasm-hash "$WASM_HASH")
+          CONTRACT_ID=$(echo "$DEPLOY_OUT" | grep -oP 'Contract ID: \K[A-Z0-9]+' || echo "$DEPLOY_OUT" | grep -oE 'C[A-Z0-9]{55}')
+          
+          echo "CONTRACT_ID=$CONTRACT_ID" >> $GITHUB_ENV
+          echo "Deployed contract ID: $CONTRACT_ID"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run post-deployment smoke test
+        env:
+          CONTRACT_ID: ${{ env.CONTRACT_ID }}
+          SOROBAN_RPC_URL: https://soroban-testnet.stellar.org
+          NETWORK_PASSPHRASE: "Test SDF Network ; September 2015"
+        run: |
+          npm init -y
+          npm install --save-dev typescript ts-node @types/node @stellar/stellar-sdk
+          npx ts-node scripts/smoke-test.ts

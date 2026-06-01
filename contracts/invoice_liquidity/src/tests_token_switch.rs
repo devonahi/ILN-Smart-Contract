@@ -48,10 +48,7 @@ fn setup() -> TestEnv {
     let xlm_admin = Address::generate(&env);
     let xlm_address = env.register_stellar_asset_contract_v2(xlm_admin).address();
 
-    contract.initialize(&admin, &usdc_address, &xlm_address);
-    
-    // Add EURC to allowlist
-    contract.add_token(&eurc_address);
+    contract.initialize(&admin, &usdc_address, &eurc_address, &xlm_address);
 
     let mut ledger_info = env.ledger().get();
     ledger_info.timestamp = 1_700_000_000;

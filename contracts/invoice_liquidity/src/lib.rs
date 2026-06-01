@@ -92,7 +92,8 @@ impl InvoiceLiquidityContract {
     pub fn initialize(
         env: Env,
         admin: Address,
-        token: Address,
+        usdc_token: Address,
+        eurc_token: Address,
         xlm_token: Address,
     ) -> Result<(), ContractError> {
         if env
@@ -119,7 +120,7 @@ impl InvoiceLiquidityContract {
                 .set(&StorageKey::NextInvoiceId, &1_u64);
         }
 
-        // Initialize config with XLM SAC address
+        // Initialize config with token addresses
         let initial_config = crate::config::Config {
             high_rep_threshold: 70,
             bonus_bps: 100,
@@ -128,13 +129,20 @@ impl InvoiceLiquidityContract {
             decay_period_ledgers: 10000,
             dispute_timeout_ledgers: 10000,
             xlm_sac_address: xlm_token.clone(),
+            usdc_sac_address: usdc_token.clone(),
+            eurc_sac_address: eurc_token.clone(),
             price_oracle: None,
         };
         crate::storage::set_config(&env, &initial_config);
 
-        // approve first token (USDC or default)
+        // approve initial tokens
         env.storage().persistent().set(
-            &crate::storage::DataKey::ApprovedToken(token.clone()),
+            &crate::storage::DataKey::ApprovedToken(usdc_token.clone()),
+            &true,
+        );
+
+        env.storage().persistent().set(
+            &crate::storage::DataKey::ApprovedToken(eurc_token.clone()),
             &true,
         );
 
@@ -145,8 +153,9 @@ impl InvoiceLiquidityContract {
         );
 
         let mut list: Vec<Address> = Vec::new(&env);
-        list.push_back(token.clone());
-        list.push_back(xlm_token.clone());
+        list.push_back(usdc_token);
+        list.push_back(xlm_token);
+        list.push_back(eurc_token);
 
         env.storage()
             .persistent()
@@ -884,9 +893,11 @@ impl InvoiceLiquidityContract {
         let token = token_client(&env, &invoice.token);
         let contract_address = env.current_contract_address();
 
-        // Handle XLM precision if needed (SAC wrapper handles conversion internally)
+        // Handle token precision if needed
         let normalized_fund_amount = if is_xlm_token(&env, &invoice.token) {
             normalize_xlm_amount(fund_amount)
+        } else if is_eurc_token(&env, &invoice.token) {
+            normalize_eurc_amount(fund_amount)
         } else {
             normalize_usdc_amount(fund_amount)
         };
@@ -1180,9 +1191,11 @@ impl InvoiceLiquidityContract {
         let token = token_client(&env, &invoice.token);
         let contract_address = env.current_contract_address();
 
-        // Handle XLM precision if needed (SAC wrapper handles conversion internally)
+        // Handle token precision if needed
         let normalized_amount = if is_xlm_token(&env, &invoice.token) {
             normalize_xlm_amount(amount)
+        } else if is_eurc_token(&env, &invoice.token) {
+            normalize_eurc_amount(amount)
         } else {
             normalize_usdc_amount(amount)
         };
@@ -1748,6 +1761,8 @@ impl InvoiceLiquidityContract {
         decay_period_ledgers: u64,
         dispute_timeout_ledgers: u64,
         xlm_sac_address: Address,
+        usdc_sac_address: Address,
+        eurc_sac_address: Address,
     ) -> Result<(), ContractError> {
         crate::config::update_config(
             &env,
@@ -1759,6 +1774,8 @@ impl InvoiceLiquidityContract {
             decay_period_ledgers,
             dispute_timeout_ledgers,
             xlm_sac_address,
+            usdc_sac_address,
+            eurc_sac_address,
         )
         .map_err(|_| ContractError::Unauthorized)
     }
@@ -1888,16 +1905,35 @@ fn is_xlm_token(env: &Env, token: &Address) -> bool {
 }
 
 /// Convert amount from XLM precision (7 decimals) to contract precision
-/// This is a no-op for now since we store amounts in their native token precision,
-/// but provides a hook for future precision normalization if needed
 fn normalize_xlm_amount(amount: i128) -> i128 {
     amount
 }
 
+/// Check if a token address is the USDC address
+fn is_usdc_token(env: &Env, token: &Address) -> bool {
+    if let Some(config) = crate::storage::get_config(env) {
+        token == &config.usdc_sac_address
+    } else {
+        false
+    }
+}
+
 /// Convert amount from USDC precision (6 decimals) to contract precision
-/// This is a no-op for now since we store amounts in their native token precision,
-/// but provides a hook for future precision normalization if needed
 fn normalize_usdc_amount(amount: i128) -> i128 {
+    amount
+}
+
+/// Check if a token address is the EURC address
+fn is_eurc_token(env: &Env, token: &Address) -> bool {
+    if let Some(config) = crate::storage::get_config(env) {
+        token == &config.eurc_sac_address
+    } else {
+        false
+    }
+}
+
+/// Convert amount from EURC precision (6 decimals) to contract precision
+fn normalize_eurc_amount(amount: i128) -> i128 {
     amount
 }
 
@@ -1944,10 +1980,22 @@ fn validate_invoice_terms(
 }
 
 fn is_approved_token(env: &Env, token: &Address) -> bool {
-    env.storage()
+    // First check the explicit allowlist in storage
+    if env.storage()
         .persistent()
         .get(&crate::storage::DataKey::ApprovedToken(token.clone()))
-        .unwrap_or(false)
+        .unwrap_or(false) {
+        return true;
+    }
+
+    // Then check the wired tokens in Config
+    if let Some(config) = crate::storage::get_config(env) {
+        if token == &config.usdc_sac_address || token == &config.eurc_sac_address || token == &config.xlm_sac_address {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn notify_distribution_funding(env: &Env, lp: &Address, amount_usdc_equivalent: i128) {

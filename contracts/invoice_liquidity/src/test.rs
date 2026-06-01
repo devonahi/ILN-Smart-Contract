@@ -37,6 +37,10 @@ pub fn setup() -> TestEnv {
     let usdc_contract_id = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_address = usdc_contract_id.address();
 
+    let eurc_admin = Address::generate(&env);
+    let eurc_contract_id = env.register_stellar_asset_contract_v2(eurc_admin.clone());
+    let eurc_address = eurc_contract_id.address();
+
     let token = TokenClient::new(&env, &usdc_address);
     let token_admin = StellarAssetClient::new(&env, &usdc_address);
 
@@ -61,8 +65,8 @@ pub fn setup() -> TestEnv {
     let xlm_contract_id = env.register_stellar_asset_contract_v2(xlm_admin);
     let xlm_address = xlm_contract_id.address();
 
-    // Initialize with mock USDC and mock XLM SAC addresses
-    contract.initialize(&usdc_admin, &usdc_address, &xlm_address);
+    // Initialize with mock USDC, EURC and mock XLM SAC addresses
+    contract.initialize(&usdc_admin, &usdc_address, &eurc_address, &xlm_address);
 
     // ---- Set ledger timestamp to a known baseline ----
     let mut ledger_info = env.ledger().get();

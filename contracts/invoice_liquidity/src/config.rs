@@ -11,6 +11,8 @@ pub struct Config {
     pub decay_period_ledgers: u64, // Ledger count between decay applications
     pub dispute_timeout_ledgers: u64, // Ledger count after which a dispute can be auto-resolved
     pub xlm_sac_address: Address, // Stellar Asset Contract address for native XLM wrapper
+    pub usdc_sac_address: Address, // USDC contract address
+    pub eurc_sac_address: Address, // EURC contract address
     pub price_oracle: Option<Address>, // Optional price oracle for USD normalisation
 }
 
@@ -34,6 +36,8 @@ pub fn update_config(
     decay_period_ledgers: u64,
     dispute_timeout_ledgers: u64,
     xlm_sac_address: Address,
+    usdc_sac_address: Address,
+    eurc_sac_address: Address,
 ) -> Result<(), ConfigError> {
     let admin = crate::storage::get_admin(env).ok_or(ConfigError::Unauthorized)?;
     let old_config = crate::storage::get_config(env).ok_or(ConfigError::Unauthorized)?;
@@ -57,6 +61,8 @@ pub fn update_config(
         decay_period_ledgers,
         dispute_timeout_ledgers,
         xlm_sac_address,
+        usdc_sac_address,
+        eurc_sac_address,
         price_oracle: old_config.price_oracle,
     };
 

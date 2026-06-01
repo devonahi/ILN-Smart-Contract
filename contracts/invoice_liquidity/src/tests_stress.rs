@@ -65,9 +65,10 @@ fn setup() -> StressTestEnv {
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
-    // Need XLM token for initialization
+    // Need EURC and XLM token for initialization
+    let eurc = register_mock_token(&env);
     let xlm = register_mock_token(&env);
-    contract.initialize(&admin, &token.address, &xlm.address);
+    contract.initialize(&admin, &token.address, &eurc.address, &xlm.address);
 
     let mut ledger_info = env.ledger().get();
     ledger_info.timestamp = 1_700_000_000;

@@ -65,7 +65,8 @@ fn setup_dispute() -> DisputeTestEnv {
     let xlm_addr = xlm_id.address();
 
     // usdc_admin acts as the contract admin.
-    contract.initialize(&usdc_admin, &usdc_addr, &xlm_addr);
+    let eurc_addr = Address::generate(&env);
+    contract.initialize(&usdc_admin, &usdc_addr, &eurc_addr, &xlm_addr);
 
     let mut ledger = env.ledger().get();
     ledger.timestamp = 1_700_000_000;

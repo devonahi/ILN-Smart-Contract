@@ -61,8 +61,7 @@ fn setup() -> MultiTokenTestEnv {
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
-    contract.initialize(&admin, &usdc.address, &xlm.address);
-    contract.add_token(&eurc.address);
+    contract.initialize(&admin, &usdc.address, &eurc.address, &xlm.address);
 
     let mut ledger_info = env.ledger().get();
     ledger_info.timestamp = 1_700_000_000;
@@ -271,8 +270,8 @@ fn test_amounts_preserve_precision_for_6_and_7_decimal_token_paths() {
         xlm_amount - expected_discount(xlm_amount),
     );
 
-    env.contract.mark_paid(&eurc_invoice, &INVOICE_AMOUNT);
-    env.contract.mark_paid(&xlm_invoice, &INVOICE_AMOUNT);
+    env.contract.mark_paid(&eurc_invoice, &eurc_amount);
+    env.contract.mark_paid(&xlm_invoice, &xlm_amount);
 
     assert_eq!(
         env.eurc.client.balance(&env.lp) - eurc_lp_before,
@@ -282,4 +281,67 @@ fn test_amounts_preserve_precision_for_6_and_7_decimal_token_paths() {
         env.xlm.client.balance(&env.lp) - xlm_lp_before,
         expected_discount(xlm_amount),
     );
+}
+
+#[test]
+fn test_cross_token_mismatch_is_physically_impossible_as_token_is_locked() {
+    let env = setup();
+    let eurc_amount = 50_000_000;
+    let invoice_id = submit_invoice(&env, &env.eurc, eurc_amount);
+
+    // LP has 10,000,000,000 USDC and 10,000,000,000 EURC from setup()
+    // If LP tries to fund EURC invoice, they MUST have EURC.
+    // The contract uses invoice.token (EURC) regardless of what the LP "thinks" they are sending.
+    
+    // We can't really "mis-fund" because the contract logic is:
+    // token = token_client(env, &invoice.token)
+    // token.transfer(...)
+    
+    // So the test is more about verifying that the contract correctly uses the invoice's locked token.
+    env.contract.fund_invoice(&env.lp, &invoice_id, &eurc_amount);
+    let invoice = env.contract.get_invoice(&invoice_id);
+    assert_eq!(invoice.token, env.eurc.address);
+    assert_eq!(invoice.status, InvoiceStatus::Funded);
+}
+
+#[test]
+fn test_eurc_token_support_is_wired_in_config() {
+    let env = setup();
+    let config = env.contract.get_config();
+    assert_eq!(config.usdc_sac_address, env.usdc.address);
+    assert_eq!(config.eurc_sac_address, env.eurc.address);
+    assert_eq!(config.xlm_sac_address, env.xlm.address);
+}
+
+#[test]
+fn test_eurc_lifecycle() {
+    let env = setup();
+    let amount = 50_000_000; // 50 EURC
+    let id = submit_invoice(&env, &env.eurc, amount);
+
+    let freelancer_before = env.eurc.client.balance(&env.freelancer);
+    let lp_before = env.eurc.client.balance(&env.lp);
+    let payer_before = env.eurc.client.balance(&env.payer);
+
+    // Fund
+    env.contract.fund_invoice(&env.lp, &id, &amount);
+    
+    let discount = expected_discount(amount);
+    assert_eq!(
+        env.eurc.client.balance(&env.freelancer) - freelancer_before,
+        amount - discount
+    );
+
+    // Pay
+    env.contract.mark_paid(&id, &amount);
+    
+    assert_eq!(
+        env.eurc.client.balance(&env.lp) - lp_before,
+        discount
+    );
+    assert_eq!(
+        payer_before - env.eurc.client.balance(&env.payer),
+        amount
+    );
+    assert_eq!(env.contract.get_invoice(&id).status, InvoiceStatus::Paid);
 }

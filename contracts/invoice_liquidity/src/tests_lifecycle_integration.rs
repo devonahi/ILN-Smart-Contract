@@ -20,6 +20,7 @@ struct MockToken {
     admin_client: StellarAssetClient<'static>,
 }
 
+#[allow(dead_code)]
 struct LifecycleTestEnv {
     env: Env,
     contract: InvoiceLiquidityContractClient<'static>,
@@ -63,7 +64,8 @@ fn setup() -> LifecycleTestEnv {
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
-    contract.initialize(&admin, &token.address, &xlm.address);
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&admin, &token.address, &eurc_address, &xlm.address);
 
     let mut ledger_info = env.ledger().get();
     ledger_info.timestamp = 1_700_000_000;

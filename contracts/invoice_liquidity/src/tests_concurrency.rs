@@ -42,7 +42,8 @@ fn setup_env() -> ConcurrencyEnv {
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
-    contract.initialize(&usdc_admin, &usdc.address(), &xlm.address());
+    let eurc_addr = Address::generate(&env);
+    contract.initialize(&usdc_admin, &usdc.address(), &eurc_addr, &xlm.address());
 
     let freelancer = Address::generate(&env);
     let payer = Address::generate(&env);

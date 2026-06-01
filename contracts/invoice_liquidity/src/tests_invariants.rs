@@ -57,7 +57,8 @@ fn setup() -> TestEnv {
     let xlm_id = env.register_stellar_asset_contract_v2(xlm_admin);
     let xlm_address = xlm_id.address();
 
-    contract.initialize(&admin, &usdc_address, &xlm_address);
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&admin, &usdc_address, &eurc_address, &xlm_address);
 
     let mut info = env.ledger().get();
     info.timestamp = 1_700_000_000;

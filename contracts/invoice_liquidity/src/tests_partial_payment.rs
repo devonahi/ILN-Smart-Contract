@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env,
 };
@@ -46,7 +46,8 @@ fn setup() -> PartialTestEnv {
     let xlm_id = env.register_stellar_asset_contract_v2(xlm_admin);
     let xlm_addr = xlm_id.address();
 
-    contract.initialize(&usdc_admin, &usdc_addr, &xlm_addr);
+    let eurc_addr = Address::generate(&env);
+    contract.initialize(&usdc_admin, &usdc_addr, &eurc_addr, &xlm_addr);
 
     let mut ledger = env.ledger().get();
     ledger.timestamp = 1_700_000_000;

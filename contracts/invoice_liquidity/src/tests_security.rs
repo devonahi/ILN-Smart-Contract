@@ -62,7 +62,9 @@ fn setup_security() -> TestEnv {
     let xlm_admin = Address::generate(&env);
     let xlm_contract_id = env.register_stellar_asset_contract_v2(xlm_admin);
     let xlm_address = xlm_contract_id.address();
-    contract.initialize(&usdc_admin, &usdc_address, &xlm_address);
+    let eurc_address = Address::generate(&env);
+
+    contract.initialize(&usdc_admin, &usdc_address, &eurc_address, &xlm_address);
 
     // Fix ledger timestamp
     let mut ledger_info = env.ledger().get();

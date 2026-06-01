@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::invoice::InvoiceStatus;
-use crate::storage::DataKey;
 use soroban_sdk::{
     testutils::{storage::Persistent, Address as _, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
@@ -41,7 +40,9 @@ fn setup() -> TestEnv {
     let xlm_admin = Address::generate(&env);
     let xlm_address = env.register_stellar_asset_contract_v2(xlm_admin).address();
 
-    contract.initialize(&usdc_admin, &usdc_address, &xlm_address);
+    let eurc_address = Address::generate(&env);
+
+    contract.initialize(&usdc_admin, &usdc_address, &eurc_address, &xlm_address);
 
     TestEnv {
         env,

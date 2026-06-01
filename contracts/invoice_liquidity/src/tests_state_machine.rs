@@ -72,7 +72,8 @@ fn setup() -> TestEnv {
     token_admin.mint(&contract.address, &(1000000000 * 100));
 
     let xlm_address = Address::generate(&env);
-    contract.initialize(&usdc_admin, &usdc_address, &xlm_address);
+    let eurc_address = Address::generate(&env);
+    contract.initialize(&usdc_admin, &usdc_address, &eurc_address, &xlm_address);
 
     // Set baseline timestamp
     let mut ledger_info = env.ledger().get();

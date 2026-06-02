@@ -14,6 +14,8 @@ pub mod errors;
 pub mod events;
 pub mod invoice;
 pub mod oracle_interface;
+pub mod multisig;
+pub mod nft;
 pub mod rate_logic;
 pub mod storage;
 pub mod top_payers;
@@ -23,6 +25,7 @@ use soroban_sdk::{
     contract, contractimpl, token::Client as TokenClient, vec, Address, BytesN, Env, IntoVal,
     Symbol, Vec,
 };
+use soroban_sdk::BytesN;
 pub mod constants;
 pub mod oracle_interface;
 #[cfg(test)]
@@ -38,19 +41,33 @@ mod tests_error_cases;
 mod tests_stress;
 #[cfg(test)]
 mod tests_lifecycle_integration;
+#[cfg(test)]
+mod tests_dutch_auction;
+mod tests_invoice_nft;
+#[cfg(test)]
+mod tests_lp_whitelist;
+#[cfg(test)]
+mod tests_multisig_admin;
+#[cfg(test)]
+mod tests_lp_portfolio_stats;
 
 pub use crate::invoice::{
     AppealRecord, ContractStats, DisputeRecord, Invoice, InvoiceParams, InvoiceStatus,
     LpFundRequest, ReputationProfile, ReputationScore, StatsDelta, TopPayerEntry,
 };
 pub use crate::storage::DataKey as StorageKey;
+    AppealRecord, Invoice, InvoiceParams, InvoiceStatus, LpFundRequest, LPStats, ReputationProfile,
+    ReputationScore, TopPayerEntry,
+};
+pub use crate::nft::InvoiceNftMetadata;
+pub use crate::storage::DataKey;
 pub use config::{Config, ConfigError};
 pub use errors::ContractError;
 pub use events::*;
 
 use crate::storage::get_admin;
 use events::{
-    AdminChanged, AppealResolved, ContractPaused, ContractUnpaused, ContractUpgraded,
+    AdminChanged, AppealResolved, AuctionFunded, AuctionStarted, ContractPaused, ContractUnpaused, ContractUpgraded,
     DefaultAppealed, DisputeResolved, FundQueueResolved, FundRequested, InvoiceCancelled,
     InvoiceDefaulted, InvoiceDisputed, InvoiceExpired, InvoiceFunded, InvoicePaid, InvoicePartiallyPaid,
     InvoiceSubmitted, InvoiceTokenChanged, InvoiceTransferred, InvoiceUpdated, ParameterUpdated, TokenAdded,
@@ -66,6 +83,20 @@ use crate::invoice::{
     set_payer_score, set_reputation, try_load_invoice,
 };
 
+use invoice::{
+    add_invoice_to_lp, add_invoice_to_submitter, add_volume, get_appeal, get_contract_stats,
+    get_dispute, get_fund_queue, get_invoice_funders, get_lp_invoices, get_lp_score,
+    get_min_payer_reputation, get_payer_score, get_pre_default_payer_score, get_queue_resolution,
+    get_reputation, get_submitter_invoices, increment_total_funded, increment_total_invoices,
+    increment_total_paid, invoice_exists, is_paused, load_invoice, next_invoice_id,
+    remove_invoice_from_lp, remove_invoice_from_submitter, save_appeal, save_dispute, save_fund_queue, save_invoice,
+    save_invoice_funders, save_pre_default_payer_score, save_queue_resolution, set_lp_score,
+    set_min_payer_reputation, set_paused, set_payer_score, set_reputation, try_load_invoice,
+    ContractStats, DisputeRecord, StorageKey, increment_invoices_submitted, increment_invoices_paid,
+    increment_invoices_defaulted,
+};
+use rate_logic::calculate_auction_rate;
+use storage::{get_lp_portfolio_stats as storage_get_lp_portfolio_stats, save_lp_portfolio_stats};
 // 30-day window in seconds for a payer to file an appeal after a default.
 const APPEAL_WINDOW_SECONDS: u64 = 30 * 24 * 60 * 60;
 
@@ -303,11 +334,43 @@ impl InvoiceLiquidityContract {
     }
 
     /// Access: Admin only
+    ///
+    /// Reject tokens that implement fee-on-transfer behavior by ensuring a small
+    /// token transfer to the contract results in the same amount being received.
     pub fn add_token(env: Env, token: Address) -> Result<(), ContractError> {
         require_admin(&env)?;
         env.storage()
             .persistent()
             .set(&StorageKey::ApprovedToken(token.clone()), &true);
+
+        let token_client = token_client(&env, &token);
+        let contract_address = env.current_contract_address();
+        let test_amount: i128 = 1_000_000;
+        let admin_address: Address = env
+            .storage()
+            .instance()
+            .get(&crate::storage::DataKey::Admin)
+            .unwrap();
+        let before_balance = token_client.balance(&contract_address);
+
+        token_client.transfer(&admin_address, &contract_address, &test_amount);
+
+        let after_balance = token_client.balance(&contract_address);
+        let received = after_balance.checked_sub(before_balance).unwrap_or(0);
+        if received != test_amount {
+            if received > 0 {
+                token_client.transfer(&contract_address, &admin_address, &received);
+            }
+            return Err(ContractError::FeeOnTransferToken);
+        }
+
+        // Return the exact test amount to the admin account after verification.
+        token_client.transfer(&contract_address, &admin_address, &test_amount);
+
+        env.storage().persistent().set(
+            &crate::storage::DataKey::ApprovedToken(token.clone()),
+            &true,
+        );
 
         let mut list: Vec<Address> = env
             .storage()
@@ -377,10 +440,279 @@ impl InvoiceLiquidityContract {
         Ok(())
     }
 
+    // ============================================================
+    // Multi-sig Admin Functions (Issue #124)
+    // ============================================================
+
+    /// Initialize multi-signature admin functionality.
+    ///
+    /// Enables multi-sig approval for sensitive operations. Once enabled,
+    /// certain admin actions require approval from multiple authorized signers.
+    ///
+    /// # Arguments
+    /// - `env`: The Soroban environment
+    /// - `signers`: Vec of addresses authorized to participate in multi-sig
+    /// - `threshold`: Number of signatures required to execute (must be <= signers.len())
+    ///
+    /// # Returns
+    /// - `Ok(())` if multi-sig admin was successfully initialized
+    /// - `Err(ContractError::InvalidMultisigConfig)` if threshold > signers.len()
+    /// - `Err(ContractError::Unauthorized)` if called by non-admin
+    ///
+    /// Access: Admin only
+    pub fn initialize_multisig_admin(
+        env: Env,
+        signers: Vec<Address>,
+        threshold: u32,
+    ) -> Result<(), ContractError> {
+        require_admin(&env)?;
+
+        // Validate configuration
+        if threshold as usize > signers.len() || threshold == 0 {
+            return Err(ContractError::InvalidMultisigConfig);
+        }
+
+        let admin = multisig::MultisigAdmin { signers, threshold };
+        storage::set_multisig_admin(&env, &admin);
+        Ok(())
+    }
+
+    /// Propose a pause action.
+    ///
+    /// Creates a new proposal to pause the contract. Must be called by
+    /// an authorized signer if multi-sig is enabled.
+    ///
+    /// # Arguments
+    /// - `env`: The Soroban environment
+    /// - `proposer`: The signer proposing the pause
+    ///
+    /// # Returns
+    /// - `Ok(proposal_id)` if proposal was created successfully
+    /// - `Err(ContractError::NotAuthorizedSigner)` if proposer is not authorized
+    ///
+    /// Access: Multi-sig authorized signer
+    pub fn propose_pause(env: Env, proposer: Address) -> Result<u64, ContractError> {
+        proposer.require_auth();
+
+        let admin = storage::get_multisig_admin(&env)
+            .ok_or(ContractError::NotAuthorizedSigner)?;
+
+        if !multisig::is_signer(&env, &admin.signers, &proposer) {
+            return Err(ContractError::NotAuthorizedSigner);
+        }
+
+        let proposal_id = storage::get_next_proposal_id(&env);
+        let proposal = multisig::MultisigProposal {
+            id: proposal_id,
+            action: multisig::AdminAction::Pause,
+            signers_approved: Vec::new(&env),
+            state: multisig::ProposalState::Pending,
+            expires_at: env.ledger().sequence() + multisig::MULTISIG_WINDOW_LEDGERS,
+        };
+
+        storage::save_multisig_proposal(&env, &proposal);
+        storage::increment_proposal_id(&env);
+
+        Ok(proposal_id)
+    }
+
+    /// Propose an unpause action.
+    ///
+    /// Creates a new proposal to unpause the contract. Must be called by
+    /// an authorized signer if multi-sig is enabled.
+    ///
+    /// # Arguments
+    /// - `env`: The Soroban environment
+    /// - `proposer`: The signer proposing the unpause
+    ///
+    /// # Returns
+    /// - `Ok(proposal_id)` if proposal was created successfully
+    /// - `Err(ContractError::NotAuthorizedSigner)` if proposer is not authorized
+    ///
+    /// Access: Multi-sig authorized signer
+    pub fn propose_unpause(env: Env, proposer: Address) -> Result<u64, ContractError> {
+        proposer.require_auth();
+
+        let admin = storage::get_multisig_admin(&env)
+            .ok_or(ContractError::NotAuthorizedSigner)?;
+
+        if !multisig::is_signer(&env, &admin.signers, &proposer) {
+            return Err(ContractError::NotAuthorizedSigner);
+        }
+
+        let proposal_id = storage::get_next_proposal_id(&env);
+        let proposal = multisig::MultisigProposal {
+            id: proposal_id,
+            action: multisig::AdminAction::Unpause,
+            signers_approved: Vec::new(&env),
+            state: multisig::ProposalState::Pending,
+            expires_at: env.ledger().sequence() + multisig::MULTISIG_WINDOW_LEDGERS,
+        };
+
+        storage::save_multisig_proposal(&env, &proposal);
+        storage::increment_proposal_id(&env);
+
+        Ok(proposal_id)
+    }
+
+    /// Sign a proposal.
+    ///
+    /// Adds the signer's signature to a proposal. Once the signature threshold
+    /// is reached, the proposal becomes executable.
+    ///
+    /// # Arguments
+    /// - `env`: The Soroban environment
+    /// - `signer`: The address signing the proposal
+    /// - `proposal_id`: The ID of the proposal to sign
+    ///
+    /// # Returns
+    /// - `Ok(())` if signature was added successfully
+    /// - `Err(ContractError::NotAuthorizedSigner)` if signer is not authorized
+    /// - `Err(ContractError::AlreadySigned)` if signer has already signed this proposal
+    /// - `Err(ContractError::ProposalNotFound)` if proposal doesn't exist
+    ///
+    /// Access: Multi-sig authorized signer
+    pub fn sign_proposal(
+        env: Env,
+        signer: Address,
+        proposal_id: u64,
+    ) -> Result<(), ContractError> {
+        signer.require_auth();
+
+        let admin = storage::get_multisig_admin(&env)
+            .ok_or(ContractError::NotAuthorizedSigner)?;
+
+        if !multisig::is_signer(&env, &admin.signers, &signer) {
+            return Err(ContractError::NotAuthorizedSigner);
+        }
+
+        let mut proposal = storage::get_multisig_proposal(&env, proposal_id)
+            .ok_or(ContractError::ProposalNotFound)?;
+
+        if multisig::has_signed(&proposal, &signer) {
+            return Err(ContractError::AlreadySigned);
+        }
+
+        proposal.signers_approved.push_back(signer);
+        storage::save_multisig_proposal(&env, &proposal);
+
+        Ok(())
+    }
+
+    /// Execute a proposal.
+    ///
+    /// Executes a proposal that has reached the signature threshold.
+    /// The action (pause/unpause) is immediately applied.
+    ///
+    /// # Arguments
+    /// - `env`: The Soroban environment
+    /// - `executor`: The address executing the proposal (must be a signer)
+    /// - `proposal_id`: The ID of the proposal to execute
+    ///
+    /// # Returns
+    /// - `Ok(())` if proposal was executed successfully
+    /// - `Err(ContractError::ThresholdNotReached)` if not enough signatures
+    /// - `Err(ContractError::ProposalNotFound)` if proposal doesn't exist
+    /// - `Err(ContractError::ProposalAlreadyExecuted)` if already executed
+    /// - `Err(ContractError::ProposalExpired)` if outside execution window
+    ///
+    /// Access: Multi-sig authorized signer
+    pub fn execute_proposal(
+        env: Env,
+        executor: Address,
+        proposal_id: u64,
+    ) -> Result<(), ContractError> {
+        executor.require_auth();
+
+        let admin = storage::get_multisig_admin(&env)
+            .ok_or(ContractError::NotAuthorizedSigner)?;
+
+        if !multisig::is_signer(&env, &admin.signers, &executor) {
+            return Err(ContractError::NotAuthorizedSigner);
+        }
+
+        let mut proposal = storage::get_multisig_proposal(&env, proposal_id)
+            .ok_or(ContractError::ProposalNotFound)?;
+
+        // Check if already executed
+        if proposal.state == multisig::ProposalState::Executed {
+            return Err(ContractError::ProposalAlreadyExecuted);
+        }
+
+        // Check if expired
+        if multisig::is_expired(&env, &proposal) {
+            proposal.state = multisig::ProposalState::Expired;
+            storage::save_multisig_proposal(&env, &proposal);
+            return Err(ContractError::ProposalExpired);
+        }
+
+        // Check threshold
+        if !multisig::threshold_reached(&proposal, admin.threshold) {
+            return Err(ContractError::ThresholdNotReached);
+        }
+
+        // Mark as executed and execute action
+        proposal.state = multisig::ProposalState::Executed;
+        storage::save_multisig_proposal(&env, &proposal);
+
+        match proposal.action {
+            multisig::AdminAction::Pause => {
+                set_paused(&env, true);
+                env.events().publish_event(&ContractPaused {
+                    timestamp: env.ledger().timestamp(),
+                });
+            }
+            multisig::AdminAction::Unpause => {
+                set_paused(&env, false);
+                env.events().publish_event(&ContractUnpaused {
+                    timestamp: env.ledger().timestamp(),
+                });
+            }
+            _ => {
+                // Other actions not yet implemented in this simplified version
+            }
+        }
+
+        Ok(())
+    }
+
+    // ============================================================
+    // END Multi-sig Admin Functions
+    // ============================================================
+
+    // ------------------------------------------------------------
+    // get_contract_stats (read-only view)
+    // ------------------------------------------------------------
+    /// Access: Anyone
     pub fn get_contract_stats(env: Env) -> ContractStats {
         invoice::get_contract_stats(&env)
     }
 
+    // ------------------------------------------------------------
+    // get_lp_portfolio_stats (read-only view) — Issue #116
+    // ------------------------------------------------------------
+    /// Return the LP yield analytics snapshot for `lp`.
+    ///
+    /// All fields are maintained incrementally in persistent storage and are
+    /// O(1) to read, making this ideal for LP dashboards that need to avoid
+    /// paginating through every invoice.
+    ///
+    /// # Fields
+    /// - `total_funded`   — cumulative capital deployed
+    /// - `total_earned`   — cumulative yield received
+    /// - `active_positions` — invoices currently in `Funded` state
+    /// - `total_positions`  — all-time funded invoice count
+    /// - `avg_yield_bps`  — running average discount rate in basis points
+    ///
+    /// Access: Anyone
+    pub fn get_lp_portfolio_stats(env: Env, lp: Address) -> LPStats {
+        storage_get_lp_portfolio_stats(&env, &lp)
+    }
+
+    // ------------------------------------------------------------
+    // list_invoices_by_submitter (Paginated)
+    // ------------------------------------------------------------
+    /// Access: Anyone
     pub fn list_invoices_by_submitter(
         env: Env,
         submitter: Address,
@@ -430,6 +762,8 @@ impl InvoiceLiquidityContract {
         due_date: u64,
         discount_rate: u32,
         token: Address,
+        referral_code: Option<BytesN<32>>,
+        allowed_lps: Option<Vec<Address>>,
     ) -> Result<u64, ContractError> {
         if is_paused(&env) {
             return Err(ContractError::ContractPaused);
@@ -441,6 +775,13 @@ impl InvoiceLiquidityContract {
         validate_invoice_terms(&env, amount, due_date, discount_rate)?;
         if !is_approved_token(&env, &token) {
             return Err(ContractError::Unauthorized);
+        }
+
+        // Issue #122: Validate LP whitelist size (max 10)
+        if let Some(ref lps) = allowed_lps {
+            if lps.len() > 10 {
+                return Err(ContractError::WhitelistTooLarge);
+            }
         }
 
         let id = next_invoice_id(&env)?;
@@ -459,7 +800,9 @@ impl InvoiceLiquidityContract {
             funded_at: None,
             amount_funded: 0,
             amount_paid: 0,
+            referral_code: referral_code.clone(),
             submitter_reputation,
+            allowed_lps: allowed_lps.clone(),
         };
 
         save_invoice(&env, &invoice);
@@ -472,6 +815,16 @@ impl InvoiceLiquidityContract {
         let mut stats_delta = StatsDelta::default();
         stats_delta.total_invoices = 1;
         stats_delta.apply(&env);
+        // Issue #119: Mint NFT representing the invoice to the freelancer
+        crate::nft::mint_invoice_nft(
+            &env,
+            id,
+            freelancer.clone(),
+            amount,
+            due_date.try_into().unwrap(),
+            discount_rate,
+            token.clone(),
+        )?;
 
         env.events().publish_event(&InvoiceSubmitted {
             invoice_id: id,
@@ -482,8 +835,139 @@ impl InvoiceLiquidityContract {
             due_date: u64::from(invoice.due_date),
             discount_rate,
             status: invoice.status,
+            discount_rate: invoice.discount_rate,
+            referral_code: referral_code.clone(),
+            status: invoice.status.clone(),
             timestamp: env.ledger().timestamp(),
+            allowed_lps: allowed_lps.clone(),
         });
+
+        // Track referral count if provided
+        if let Some(code) = referral_code {
+            let key = crate::storage::DataKey::ReferralCount(code.clone());
+            let current: u64 = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(0);
+            env.storage().persistent().set(&key, &(current + 1));
+        }
+
+        Ok(id)
+    }
+
+    // ----------------------------------------------------------------
+    // submit_invoice_auction
+    // ----------------------------------------------------------------
+    /// Access: Submitter only
+    ///
+    /// Creates an invoice with Dutch auction funding.
+    /// The rate starts high and decreases linearly over time until the first LP accepts.
+    pub fn submit_invoice_auction(
+        env: Env,
+        freelancer: Address,
+        payer: Address,
+        amount: i128,
+        due_date: u64,
+        start_rate: u32,           // starting rate in basis points
+        min_rate: u32,             // minimum rate in basis points
+        rate_decay_per_hour: u32,  // decay in basis points per hour
+        token: Address,
+        referral_code: Option<BytesN<32>>,
+    ) -> Result<u64, ContractError> {
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+
+        require_submitter(&env, &freelancer)?;
+
+        if freelancer == payer {
+            return Err(ContractError::SelfInvoice);
+        }
+
+        // Validate auction parameters
+        if start_rate == 0 || start_rate > crate::constants::MAX_DISCOUNT_RATE {
+            return Err(ContractError::InvalidAuctionParams);
+        }
+        if min_rate > start_rate {
+            return Err(ContractError::InvalidAuctionParams);
+        }
+        if rate_decay_per_hour == 0 {
+            return Err(ContractError::InvalidAuctionParams);
+        }
+
+        // Validate invoice terms using the start_rate as the discount rate for validation
+        validate_invoice_terms(&env, amount, due_date, start_rate)?;
+
+        // token validation
+        if !is_approved_token(&env, &token) {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let id = next_invoice_id(&env)?;
+
+        // Capture the freelancer's reputation score at submission time
+        let submitter_reputation = get_payer_score(&env, &freelancer);
+        let current_time = env.ledger().timestamp();
+
+        let invoice = Invoice {
+            id,
+            freelancer: freelancer.clone(),
+            payer: payer.clone(),
+            token: token.clone(),
+            amount,
+            due_date: due_date.try_into().unwrap(),
+            discount_rate: start_rate,
+            status: InvoiceStatus::Pending,
+            funder: None,
+            funded_at: None,
+            amount_funded: 0,
+            amount_paid: 0,
+            referral_code: referral_code.clone(),
+            submitter_reputation,
+            // Auction fields
+            is_auction: true,
+            auction_start_rate: Some(start_rate),
+            auction_min_rate: Some(min_rate),
+            auction_rate_decay_per_hour: Some(rate_decay_per_hour),
+            auction_started_at: Some(current_time.try_into().unwrap()),
+        };
+
+        save_invoice(&env, &invoice);
+
+        // Update submitter index
+        add_invoice_to_submitter(&env, &freelancer, id);
+
+        // Increment total invoices counter
+        increment_total_invoices(&env);
+
+        // Increment detailed reputation invoices_submitted count
+        increment_invoices_submitted(&env, &freelancer);
+
+        env.events().publish_event(&AuctionStarted {
+            invoice_id: invoice.id,
+            freelancer: invoice.freelancer.clone(),
+            payer: invoice.payer.clone(),
+            token: invoice.token.clone(),
+            amount: invoice.amount,
+            due_date: u64::from(invoice.due_date),
+            start_rate,
+            min_rate,
+            rate_decay_per_hour,
+            started_at: current_time,
+        });
+
+        // Track referral count if provided
+        if let Some(code) = referral_code {
+            let key = crate::storage::DataKey::ReferralCount(code.clone());
+            let current: u64 = env
+                .storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(0);
+            env.storage().persistent().set(&key, &(current + 1));
+        }
+
         Ok(id)
         }
 
@@ -642,6 +1126,14 @@ impl InvoiceLiquidityContract {
 
             let id = next_id;
             next_id += 1;
+            // Issue #122: Validate LP whitelist size (max 10)
+            if let Some(ref lps) = params.allowed_lps {
+                if lps.len() > 10 {
+                    return Err(ContractError::WhitelistTooLarge);
+                }
+            }
+
+            let id = next_invoice_id(&env)?;
 
             let submitter_reputation = get_payer_score(&env, &params.freelancer);
             let invoice = Invoice {
@@ -657,7 +1149,9 @@ impl InvoiceLiquidityContract {
                 funded_at: None,
                 amount_funded: 0,
                 amount_paid: 0,
+                referral_code: params.referral_code.clone(),
                 submitter_reputation,
+                allowed_lps: params.allowed_lps.clone(),
             };
 
             save_invoice(&env, &invoice);
@@ -679,12 +1173,36 @@ impl InvoiceLiquidityContract {
                 status: invoice.status,
                 timestamp: env.ledger().timestamp(),
             });
+                referral_code: params.referral_code.clone(),
+                status: invoice.status.clone(),
+                timestamp: env.ledger().timestamp(),
+            });
+
+            // Track referral count if provided
+            if let Some(code) = params.referral_code {
+                let key = crate::storage::DataKey::ReferralCount(code.clone());
+                let current: u64 = env
+                    .storage()
+                    .persistent()
+                    .get(&key)
+                    .unwrap_or(0);
+                env.storage().persistent().set(&key, &(current + 1));
+            }
+
             ids.push_back(id);
         }
 
         // OPTIMIZATION: Apply all stat changes in one write
         stats_delta.apply(&env);
         Ok(ids)
+    }
+
+    /// Access: Anyone
+    pub fn get_referral_stats(env: Env, code: BytesN<32>) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::ReferralCount(code))
+            .unwrap_or(0)
     }
 
     // ================================================================
@@ -825,6 +1343,22 @@ impl InvoiceLiquidityContract {
             }
         }
 
+        // Issue #122: LP whitelist check for private invoices
+        // If the invoice has an LP whitelist, verify the funder is in it.
+        if let Some(ref allowed_lps) = invoice.allowed_lps {
+            let mut is_whitelisted = false;
+            for i in 0..allowed_lps.len() {
+                if allowed_lps.get(i).unwrap() == funder {
+                    is_whitelisted = true;
+                    break;
+                }
+            }
+            if !is_whitelisted {
+                return Err(ContractError::LPNotWhitelisted);
+            }
+        }
+
+        // Issue #19: the invoice token must still be on the governance allowlist.
         if !is_approved_token(&env, &invoice.token) {
             return Err(ContractError::Unauthorized);
         }
@@ -909,9 +1443,26 @@ impl InvoiceLiquidityContract {
             normalize_usdc_amount(fund_amount)
         };
 
+        // --- Calculate the effective rate ---
+        // For auction invoices, calculate the current auction rate
+        let effective_rate = if invoice.is_auction {
+            let current_time = env.ledger().timestamp();
+            let auction_started_at = invoice.auction_started_at.unwrap_or(0) as u64;
+            let start_rate = invoice.auction_start_rate.unwrap_or(0);
+            let min_rate = invoice.auction_min_rate.unwrap_or(0);
+            let decay_per_hour = invoice.auction_rate_decay_per_hour.unwrap_or(0);
+
+            calculate_auction_rate(current_time, auction_started_at, start_rate, min_rate, decay_per_hour)
+        } else {
+            invoice.discount_rate
+        };
+
         let fund_discount = normalized_fund_amount
             .checked_mul(discount_rate_as_i128(invoice.discount_rate))
             .unwrap_or(0) / 10_000;
+            .checked_mul(discount_rate_as_i128(effective_rate))
+            .unwrap_or(0)
+            / 10_000;
         let cost = normalized_fund_amount - fund_discount;
 
         token.transfer(&funder, &contract_address, &cost);
@@ -935,6 +1486,12 @@ impl InvoiceLiquidityContract {
 
         if invoice.amount_funded == invoice.amount {
             let discount_amount = invoice.amount.checked_mul(discount_rate_as_i128(invoice.discount_rate)).unwrap_or(0) / 10_000;
+            // Fully funded — pay out to freelancer
+            let discount_amount = invoice
+                .amount
+                .checked_mul(discount_rate_as_i128(effective_rate))
+                .unwrap_or(0)
+                / 10_000;
             let freelancer_payout = invoice.amount - discount_amount;
             token.transfer(&contract_address, &invoice.freelancer, &freelancer_payout);
             invoice.status = InvoiceStatus::Funded;
@@ -950,6 +1507,55 @@ impl InvoiceLiquidityContract {
 
         // OPTIMIZATION: Batch stat updates
         let mut stats_delta = StatsDelta::default();
+
+        // Issue #119: Transfer NFT to the LP when invoice is fully funded
+        if invoice.status == InvoiceStatus::Funded {
+            crate::nft::transfer_invoice_nft(&env, invoice_id, invoice.freelancer.clone(), funder.clone())?;
+        }
+
+        // Update LP index
+        add_invoice_to_lp(&env, &funder, invoice_id);
+
+        // ── Issue #116: Maintain LP portfolio stats ───────────────
+        // We track a new position only on the first fund for this LP on this
+        // invoice (guarded by the `!found` flag set above in the funders loop).
+        // partial top-ups by the same LP are already merged into the funders
+        // entry — adding a position again would double-count.
+        {
+            let mut lp_stats = storage_get_lp_portfolio_stats(&env, &funder);
+            if !found {
+                // New position: accumulate capital and update the running
+                // average yield (simple mean of discount_rate_bps values).
+                lp_stats.total_funded = lp_stats
+                    .total_funded
+                    .checked_add(fund_amount)
+                    .unwrap_or(lp_stats.total_funded);
+                let old_total = lp_stats.total_positions as u64;
+                lp_stats.total_positions = lp_stats.total_positions.saturating_add(1);
+                let new_total = lp_stats.total_positions as u64;
+                // Weighted recalculation: avg = (old_avg * old_n + rate) / new_n
+                lp_stats.avg_yield_bps = if new_total > 0 {
+                    (((lp_stats.avg_yield_bps as u64) * old_total
+                        + invoice.discount_rate as u64)
+                        / new_total) as u32
+                } else {
+                    invoice.discount_rate
+                };
+            } else {
+                // Top-up on an existing position — only grow total_funded.
+                lp_stats.total_funded = lp_stats
+                    .total_funded
+                    .checked_add(fund_amount)
+                    .unwrap_or(lp_stats.total_funded);
+            }
+            // A position becomes "active" when the invoice is fully Funded.
+            if invoice.status == InvoiceStatus::Funded {
+                lp_stats.active_positions = lp_stats.active_positions.saturating_add(1);
+            }
+            save_lp_portfolio_stats(&env, &funder, &lp_stats);
+        }
+
+        // Increment total funded counter if fully funded
         if invoice.status == InvoiceStatus::Funded {
             stats_delta.total_funded = 1;
         }
@@ -980,6 +1586,58 @@ impl InvoiceLiquidityContract {
             effective_yield_bps,
             timestamp: now,
         });
+
+        let seconds_to_due = if u64::from(invoice.due_date) > now {
+            u64::from(invoice.due_date) - now
+        } else {
+            0
+        };
+
+        let days_to_due = seconds_to_due / (24 * 60 * 60);
+
+        let effective_yield_bps = ((effective_rate as u64 * days_to_due) / 365) as u32;
+
+        // --- Emit appropriate event ---
+        if invoice.is_auction {
+            let hours_elapsed = if let Some(started_at) = invoice.auction_started_at {
+                ((now as u32 - started_at) / 3600) as u32
+            } else {
+                0
+            };
+
+            env.events().publish_event(&AuctionFunded {
+                invoice_id: invoice.id,
+                funder: funder.clone(),
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                fund_amount,
+                effective_rate,
+                hours_elapsed,
+                funded_at: now,
+            });
+        } else {
+            env.events().publish_event(&InvoiceFunded {
+                invoice_id: invoice.id,
+                funder: funder.clone(),
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                fund_amount,
+                amount_funded: invoice.amount_funded,
+                invoice_amount: invoice.amount,
+                due_date: u64::from(invoice.due_date),
+                discount_rate: invoice.discount_rate,
+                funded_at: invoice.funded_at.map(|ts| ts.into()),
+                status: invoice.status.clone(),
+
+                // NEW
+                lp: funder.clone(),
+                effective_yield_bps,
+                timestamp: now,
+            });
+        }
+
         Ok(())
     }
 
@@ -1050,6 +1708,84 @@ impl InvoiceLiquidityContract {
         token.transfer(&invoice.payer, &contract_address, &normalized_amount);
 
         invoice.amount_paid += amount;
+    // ------------------------------------------------------------
+    // transfer_lp_position
+    /// Access: Current LP only
+    pub fn transfer_lp_position(
+        env: Env,
+        invoice_id: u64,
+        new_lp: Address,
+    ) -> Result<(), ContractError> {
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
+
+        if !invoice_exists(&env, invoice_id) {
+            return Err(ContractError::InvoiceNotFound);
+        }
+
+        let mut invoice = load_invoice(&env, invoice_id);
+        match invoice.status {
+            InvoiceStatus::Funded => {}
+            InvoiceStatus::Pending | InvoiceStatus::PartiallyFunded => {
+                return Err(ContractError::NotFunded)
+            }
+            InvoiceStatus::Paid => return Err(ContractError::AlreadyPaid),
+            InvoiceStatus::Defaulted => return Err(ContractError::InvoiceDefaulted),
+            InvoiceStatus::Appealed => return Err(ContractError::InvoiceAppealed),
+            InvoiceStatus::Disputed => return Err(ContractError::InvoiceDisputed),
+            InvoiceStatus::Expired => return Err(ContractError::InvoiceExpired),
+            InvoiceStatus::Cancelled => return Err(ContractError::AlreadyCancelled),
+        }
+
+        let current_lp = invoice
+            .funder
+            .clone()
+            .ok_or(ContractError::Unauthorized)?;
+
+        current_lp.require_auth();
+
+        if current_lp == new_lp {
+            return Err(ContractError::Unauthorized);
+        }
+
+        let mut funders = get_invoice_funders(&env, invoice_id);
+        for i in 0..funders.len() {
+            let (addr, amt) = funders.get(i).unwrap();
+            if addr == current_lp {
+                funders.set(i, (new_lp.clone(), amt));
+            }
+        }
+        save_invoice_funders(&env, invoice_id, &funders);
+
+        invoice.funder = Some(new_lp.clone());
+        save_invoice(&env, &invoice);
+
+        // Issue #119: Transfer NFT to the new LP when LP position is transferred
+        // The NFT represents the LP's claim on the invoice
+        crate::nft::transfer_invoice_nft(&env, invoice_id, current_lp.clone(), new_lp.clone())?;
+
+        remove_invoice_from_lp(&env, &current_lp, invoice_id);
+        add_invoice_to_lp(&env, &new_lp, invoice_id);
+
+        env.events().publish_event(&LPPositionTransferred {
+            invoice_id,
+            old_lp: current_lp,
+            new_lp,
+            status: invoice.status.clone(),
+        });
+
+        Ok(())
+    }
+
+    // ------------------------------------------------------------
+    // cancel_invoice
+    // ------------------------------------------------------------
+    /// Access: Submitter only
+    pub fn cancel_invoice(env: Env, invoice_id: u64) -> Result<(), ContractError> {
+        if is_paused(&env) {
+            return Err(ContractError::ContractPaused);
+        }
 
         if invoice.amount_paid < invoice.amount {
             save_invoice(&env, &invoice);
@@ -1084,6 +1820,30 @@ impl InvoiceLiquidityContract {
         }
 
         invoice.status = InvoiceStatus::Paid;
+        // ── Issue #116: Update each LP's portfolio stats on settlement ────
+        for i in 0..funders.len() {
+            let (funder_addr, fund_amt) = funders.get(i).unwrap();
+            let funder_share =
+                distribute_amount.checked_mul(fund_amt).unwrap_or(0) / invoice.amount;
+            let earned = funder_share.saturating_sub(fund_amt);
+            let mut lp_stats = storage_get_lp_portfolio_stats(&env, &funder_addr);
+            lp_stats.total_earned = lp_stats
+                .total_earned
+                .checked_add(earned)
+                .unwrap_or(lp_stats.total_earned);
+            lp_stats.active_positions = lp_stats.active_positions.saturating_sub(1);
+            save_lp_portfolio_stats(&env, &funder_addr, &lp_stats);
+        }
+
+        // ---- Update invoice ----
+        invoice.status = InvoiceStatus::Paid;
+
+        // Issue #119: Burn the NFT when invoice is marked as paid
+        // Get the current NFT owner (should be the LP who funded it)
+        if let Some(nft_owner) = crate::nft::get_invoice_nft_owner(&env, invoice_id) {
+            crate::nft::burn_invoice_nft(&env, invoice_id, nft_owner)?;
+        }
+
         save_invoice(&env, &invoice);
 
         // OPTIMIZATION: Batch stat update
@@ -1478,6 +2238,54 @@ impl InvoiceLiquidityContract {
         Ok(())
     }
 
+    // ----------------------------------------------------------------
+    // NFT Query Functions (Issue #119)
+    // ----------------------------------------------------------------
+    /// Get the metadata of an invoice NFT
+    /// 
+    /// Returns the NFT metadata including invoice details and current owner.
+    /// 
+    /// # Arguments
+    /// * `invoice_id` - The invoice ID whose NFT metadata to retrieve
+    /// 
+    /// # Errors
+    /// Returns `ContractError::InvoiceNftNotFound` if no NFT exists for this invoice.
+    /// 
+    /// Access: Anyone
+    pub fn get_invoice_nft_metadata(env: Env, invoice_id: u64) -> Result<InvoiceNftMetadata, ContractError> {
+        crate::nft::get_invoice_nft_metadata(&env, invoice_id)
+            .ok_or(ContractError::InvoiceNftNotFound)
+    }
+
+    /// Get the current owner of an invoice NFT
+    /// 
+    /// Returns the address that currently owns the NFT for this invoice.
+    /// 
+    /// # Arguments
+    /// * `invoice_id` - The invoice ID whose NFT owner to retrieve
+    /// 
+    /// # Returns
+    /// Option containing the owner address if the NFT exists, None otherwise.
+    /// 
+    /// Access: Anyone
+    pub fn get_invoice_nft_owner(env: Env, invoice_id: u64) -> Option<Address> {
+        crate::nft::get_invoice_nft_owner(&env, invoice_id)
+    }
+
+    /// Check if an invoice NFT exists
+    /// 
+    /// # Arguments
+    /// * `invoice_id` - The invoice ID to check
+    /// 
+    /// # Returns
+    /// true if the NFT exists, false otherwise.
+    /// 
+    /// Access: Anyone
+    pub fn invoice_nft_exists(env: Env, invoice_id: u64) -> bool {
+        crate::nft::invoice_nft_exists(&env, invoice_id)
+    }
+}
+
     pub fn join_fund_queue(env: Env, lp: Address, invoice_id: u64) -> Result<(), ContractError> {
         if is_paused(&env) { return Err(ContractError::ContractPaused); }
         require_lp(&env, &lp)?;
@@ -1708,6 +2516,8 @@ mod tests_reputation_events;
 mod tests_oracle_verification;
 #[cfg(test)]
 mod tests_oracle_freshness;
+#[cfg(test)]
+mod tests_referral;
 mod tests_discount_invariants;
 #[cfg(test)]
 mod tests_token_switch;

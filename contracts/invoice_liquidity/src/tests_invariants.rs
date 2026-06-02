@@ -265,6 +265,7 @@ fn submit_invoice_event_contains_all_fields() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<soroban_sdk::BytesN<32>>::None,
     );
 
     let events = t.env.events().all().filter_by_contract(&t.contract.address);
@@ -276,6 +277,7 @@ fn submit_invoice_event_contains_all_fields() {
         amount: INVOICE_AMOUNT,
         due_date,
         discount_rate: DISCOUNT_RATE,
+        referral_code: None,
         status: InvoiceStatus::Pending,
         timestamp: ts_before,
     }
@@ -305,6 +307,7 @@ fn submit_invoice_event_timestamp_matches_ledger() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
+        &Option::<soroban_sdk::BytesN<32>>::None,
     );
 
     let events = t.env.events().all().filter_by_contract(&t.contract.address);
@@ -316,6 +319,7 @@ fn submit_invoice_event_timestamp_matches_ledger() {
         amount: INVOICE_AMOUNT,
         due_date,
         discount_rate: DISCOUNT_RATE,
+        referral_code: None,
         status: InvoiceStatus::Pending,
         timestamp: 1_800_000_000,
     }

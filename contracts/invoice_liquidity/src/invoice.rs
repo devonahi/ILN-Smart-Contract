@@ -38,7 +38,18 @@ pub struct Invoice {
     pub funded_at: Option<u32>,  // ledger timestamp when funding occurred
     pub amount_funded: i128,     // cumulative amount funded so far
     pub amount_paid: i128,       // cumulative amount paid by the payer
+    pub referral_code: Option<BytesN<32>>, // optional referral code used at submission
     pub submitter_reputation: u32, // snapshot of freelancer's reputation at submission time
+    // Dutch auction fields
+    pub is_auction: bool,    // whether this invoice uses Dutch auction pricing
+    pub auction_start_rate: Option<u32>, // starting rate in basis points
+    pub auction_min_rate: Option<u32>,   // minimum rate in basis points
+    pub auction_rate_decay_per_hour: Option<u32>, // decay in basis points per hour
+    pub auction_started_at: Option<u32>, // timestamp when auction was started
+    /// Issue #122: Optional whitelist of LP addresses allowed to fund this invoice.
+    /// If empty/None, invoice is public. If Some, only whitelisted LPs can fund.
+    /// Capped at 10 addresses to limit storage.
+    pub allowed_lps: Option<soroban_sdk::Vec<Address>>,
 }
 
 #[contracttype]
@@ -50,6 +61,9 @@ pub struct InvoiceParams {
     pub due_date: u64,
     pub discount_rate: u32,
     pub token: Address,
+    pub referral_code: Option<BytesN<32>>,
+    /// Issue #122: Optional whitelist of allowed LPs for this invoice
+    pub allowed_lps: Option<soroban_sdk::Vec<Address>>,
 }
 
 #[contracttype]
@@ -111,6 +125,24 @@ impl ContractStats {
             total_volume_usd_normalized: 0,
         }
     }
+/// Per-LP analytics snapshot (Issue #116).
+///
+/// Updated incrementally on every `fund_invoice` and `mark_paid` call so the
+/// dashboard can read a single storage slot instead of iterating all invoices.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct LPStats {
+    /// Cumulative token-amount sent as capital across all funded invoices.
+    pub total_funded: i128,
+    /// Cumulative yield earned (payout received minus capital deployed).
+    pub total_earned: i128,
+    /// Number of invoices currently in `Funded` state for this LP.
+    pub active_positions: u32,
+    /// Total number of invoice positions this LP has ever funded.
+    pub total_positions: u32,
+    /// Simple average discount rate in basis points across all positions
+    /// (sum of discount_rate_bps / total_positions), or 0 when no positions.
+    pub avg_yield_bps: u32,
 }
 
 // ----------------------------------------------------------------
@@ -213,6 +245,27 @@ pub fn add_invoice_to_lp(env: &Env, lp: &Address, invoice_id: u64) {
         invoices.push_back(invoice_id);
         let key = StorageKey::LpInvoices(lp.clone());
         env.storage().persistent().set(&key, &invoices);
+    }
+}
+
+pub fn remove_invoice_from_lp(env: &Env, lp: &Address, invoice_id: u64) {
+    let invoices = get_lp_invoices(env, lp);
+    let mut new_invoices = soroban_sdk::Vec::new(env);
+    for id in invoices.iter() {
+        if id != invoice_id {
+            new_invoices.push_back(id);
+        }
+    }
+    let key = StorageKey::LpInvoices(lp.clone());
+    if new_invoices.is_empty() {
+        if env.storage().persistent().has(&key) {
+            env.storage().persistent().remove(&key);
+        }
+    } else {
+        env.storage().persistent().set(&key, &new_invoices);
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, 1_000_000, 2_000_000);
     }
 }
 

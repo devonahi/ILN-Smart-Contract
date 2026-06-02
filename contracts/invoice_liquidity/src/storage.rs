@@ -10,6 +10,8 @@ pub enum DataKey {
     Admin,
     Config,
     FeeRate,
+    ProtocolFeeBps,
+    TreasuryAddress,
     MaxDiscountRate,
     DistributionContract,
     Paused,

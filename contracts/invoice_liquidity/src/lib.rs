@@ -240,6 +240,40 @@ impl InvoiceLiquidityContract {
     }
 
     /// Access: Admin only
+    pub fn update_protocol_fee_bps(env: Env, bps: u32) -> Result<(), ContractError> {
+        require_admin(&env)?;
+        if bps > 100 {
+            return Err(ContractError::InvalidDiscountRate);
+        }
+        let old_bps: u32 = env
+            .storage()
+            .instance()
+            .get(&crate::storage::DataKey::ProtocolFeeBps)
+            .unwrap_or(0);
+        env.storage()
+            .instance()
+            .set(&crate::storage::DataKey::ProtocolFeeBps, &bps);
+            
+        let updated_by = get_admin(&env).ok_or(ContractError::Unauthorized)?;
+        env.events().publish_event(&ParameterUpdated {
+            param_name: Symbol::new(&env, "protocol_fee_bps"),
+            old_value: old_bps as i128,
+            new_value: bps as i128,
+            updated_by,
+        });
+        Ok(())
+    }
+
+    /// Access: Admin only
+    pub fn set_treasury_address(env: Env, treasury: Address) -> Result<(), ContractError> {
+        require_admin(&env)?;
+        env.storage()
+            .instance()
+            .set(&crate::storage::DataKey::TreasuryAddress, &treasury);
+        Ok(())
+    }
+
+    /// Access: Admin only
     pub fn update_max_discount(env: Env, rate: u32) -> Result<(), ContractError> {
         require_admin(&env)?;
 
@@ -1978,20 +2012,55 @@ impl InvoiceLiquidityContract {
         // Total amount funded by primary LP
         let primary_lp_funded = funders.get(0).unwrap().1;
 
+        let protocol_fee_bps = env
+            .storage()
+            .instance()
+            .get(&crate::storage::DataKey::ProtocolFeeBps)
+            .unwrap_or(0_u32);
+
+        let treasury = env
+            .storage()
+            .instance()
+            .get::<_, Address>(&crate::storage::DataKey::TreasuryAddress);
+
         // LP payout after settlement distribution
-        let primary_lp_payout = distribute_amount
+        let mut primary_lp_payout = distribute_amount
             .checked_mul(primary_lp_funded)
             .unwrap_or(0)
             / invoice.amount;
 
         // LP earnings
-        let lp_earned = primary_lp_payout - primary_lp_funded;
+        let mut lp_earned = primary_lp_payout - primary_lp_funded;
+
+        if lp_earned > 0 && protocol_fee_bps > 0 && treasury.is_some() {
+            let fee = lp_earned.checked_mul(protocol_fee_bps as i128).unwrap_or(0) / 10_000;
+            primary_lp_payout -= fee;
+            lp_earned -= fee;
+        }
 
         // Distribute proportionally to funders
         for i in 0..funders.len() {
             let (funder_addr, fund_amt) = funders.get(i).unwrap();
-            let funder_share =
+            let mut funder_share =
                 distribute_amount.checked_mul(fund_amt).unwrap_or(0) / invoice.amount;
+            
+            let earned = funder_share.saturating_sub(fund_amt);
+            if earned > 0 && protocol_fee_bps > 0 {
+                if let Some(treasury_addr) = treasury.clone() {
+                    let fee = earned.checked_mul(protocol_fee_bps as i128).unwrap_or(0) / 10_000;
+                    if fee > 0 {
+                        funder_share -= fee;
+                        token.transfer(&contract_address, &treasury_addr, &fee);
+                        
+                        env.events().publish_event(&crate::events::FeesCollected {
+                            invoice_id,
+                            fee_amount: fee,
+                            treasury: treasury_addr,
+                        });
+                    }
+                }
+            }
+
             if funder_share > 0 {
                 token.transfer(&contract_address, &funder_addr, &funder_share);
             }
@@ -2002,7 +2071,13 @@ impl InvoiceLiquidityContract {
             let (funder_addr, fund_amt) = funders.get(i).unwrap();
             let funder_share =
                 distribute_amount.checked_mul(fund_amt).unwrap_or(0) / invoice.amount;
-            let earned = funder_share.saturating_sub(fund_amt);
+            let mut earned = funder_share.saturating_sub(fund_amt);
+            
+            if earned > 0 && protocol_fee_bps > 0 && treasury.is_some() {
+                let fee = earned.checked_mul(protocol_fee_bps as i128).unwrap_or(0) / 10_000;
+                earned -= fee;
+            }
+
             let mut lp_stats = storage_get_lp_portfolio_stats(&env, &funder_addr);
             lp_stats.total_earned = lp_stats
                 .total_earned

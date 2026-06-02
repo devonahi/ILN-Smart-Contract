@@ -219,19 +219,25 @@ fn test_submit_multiple_invoices_increment_ids() {
 // submit_invoices_batch
 // ----------------------------------------------------------------
 
-#[test]
-fn test_submit_invoices_batch_happy_path() {
-    let t = setup();
-    let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-
-    let params = InvoiceParams {
+/// Build a fully-populated, valid `InvoiceParams` for batch tests (Issue #120).
+fn batch_params(t: &TestEnv, due_date: u64) -> InvoiceParams {
+    InvoiceParams {
         freelancer: t.freelancer.clone(),
         payer: t.payer.clone(),
         amount: INVOICE_AMOUNT,
         due_date,
         discount_rate: DISCOUNT_RATE,
         token: t.token.address.clone(),
-    };
+        referral_code: None,
+        allowed_lps: None,
+    }
+}
+
+#[test]
+fn test_submit_invoices_batch_happy_path() {
+    let t = setup();
+    let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
+    let params = batch_params(&t, due_date);
 
     let mut batch = Vec::new(&t.env);
     batch.push_back(params.clone());
@@ -244,30 +250,45 @@ fn test_submit_invoices_batch_happy_path() {
     assert_eq!(ids.get(0).unwrap(), 1);
     assert_eq!(ids.get(1).unwrap(), 2);
     assert_eq!(ids.get(2).unwrap(), 3);
+    assert_eq!(t.contract.get_invoice_count(&None), 3);
+}
+
+#[test]
+fn test_submit_invoices_batch_max_size_succeeds() {
+    let t = setup();
+    let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
+    let params = batch_params(&t, due_date);
+
+    // Exactly MAX_BATCH_SIZE (50) invoices must succeed.
+    let mut batch = Vec::new(&t.env);
+    for _ in 0..50 {
+        batch.push_back(params.clone());
+    }
+
+    let ids = t.contract.submit_invoices_batch(&batch);
+    assert_eq!(ids.len(), 50);
+    assert_eq!(ids.get(0).unwrap(), 1);
+    assert_eq!(ids.get(49).unwrap(), 50);
+    assert_eq!(t.contract.get_invoice_count(&None), 50);
 }
 
 #[test]
 fn test_submit_invoices_batch_rejects_over_limit() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
+    let params = batch_params(&t, due_date);
 
-    let params = InvoiceParams {
-        freelancer: t.freelancer.clone(),
-        payer: t.payer.clone(),
-        amount: INVOICE_AMOUNT,
-        due_date,
-        discount_rate: DISCOUNT_RATE,
-        token: t.token.address.clone(),
-    };
-
+    // One past MAX_BATCH_SIZE (51) must be rejected.
     let mut batch = Vec::new(&t.env);
-    for _ in 0..11 {
+    for _ in 0..51 {
         batch.push_back(params.clone());
     }
 
     let result = t.contract.try_submit_invoices_batch(&batch);
-
     assert_eq!(result, Err(Ok(ContractError::BatchTooLarge)));
+
+    // Nothing was created.
+    assert_eq!(t.contract.get_invoice_count(&None), 0);
 }
 
 #[test]
@@ -277,32 +298,19 @@ fn test_submit_invoices_batch_atomicity_fail() {
 
     let mut batch = Vec::new(&t.env);
 
-    // Valid invoice
-    batch.push_back(InvoiceParams {
-        freelancer: t.freelancer.clone(),
-        payer: t.payer.clone(),
-        amount: INVOICE_AMOUNT,
-        due_date,
-        discount_rate: DISCOUNT_RATE,
-        token: t.token.address.clone(),
-    });
+    // Valid invoice...
+    batch.push_back(batch_params(&t, due_date));
 
-    // Invalid invoice (amount = 0)
-    batch.push_back(InvoiceParams {
-        freelancer: t.freelancer.clone(),
-        payer: t.payer.clone(),
-        amount: 0,
-        due_date,
-        discount_rate: DISCOUNT_RATE,
-        token: t.token.address.clone(),
-    });
+    // ...followed by an invalid one (amount = 0) -> whole batch must revert.
+    let mut bad = batch_params(&t, due_date);
+    bad.amount = 0;
+    batch.push_back(bad);
 
     let result = t.contract.try_submit_invoices_batch(&batch);
-
     assert_eq!(result, Err(Ok(ContractError::InvalidAmount)));
 
-    // Verify no invoice was saved
-    assert_eq!(t.contract.get_invoice_count(), 0);
+    // Atomicity: the valid invoice before the failure was NOT persisted.
+    assert_eq!(t.contract.get_invoice_count(&None), 0);
 }
 
 // ----------------------------------------------------------------

@@ -1202,7 +1202,10 @@ impl InvoiceLiquidityContract {
             return Err(ContractError::ContractPaused);
         }
 
-        if invoices.len() > 10 {
+        // Issue #120: cap batch size to bound per-transaction work. The whole
+        // batch is atomic — any failure below returns `Err`, which reverts the
+        // transaction and every write made so far (all-or-nothing).
+        if invoices.len() > crate::constants::MAX_BATCH_SIZE {
             return Err(ContractError::BatchTooLarge);
         }
 
@@ -1247,6 +1250,12 @@ impl InvoiceLiquidityContract {
                 amount_paid: 0,
                 referral_code: params.referral_code.clone(),
                 submitter_reputation,
+                // Batch invoices are standard (non-auction) submissions.
+                is_auction: false,
+                auction_start_rate: None,
+                auction_min_rate: None,
+                auction_rate_decay_per_hour: None,
+                auction_started_at: None,
                 allowed_lps: params.allowed_lps.clone(),
             };
 
@@ -1257,6 +1266,9 @@ impl InvoiceLiquidityContract {
 
             // Increment total invoices counter
             increment_total_invoices(&env);
+
+            // Parity with submit_invoice: track detailed reputation submissions.
+            increment_invoices_submitted(&env, &params.freelancer);
 
             env.events().publish_event(&InvoiceSubmitted {
                 invoice_id: invoice.id,
@@ -1269,6 +1281,7 @@ impl InvoiceLiquidityContract {
                 referral_code: params.referral_code.clone(),
                 status: invoice.status.clone(),
                 timestamp: env.ledger().timestamp(),
+                allowed_lps: params.allowed_lps.clone(),
             });
 
             // Track referral count if provided

@@ -62,6 +62,8 @@ pub enum DataKey {
     MultisigProposal(u64),
     /// Issue #116: Per-LP portfolio analytics snapshot
     LPPortfolioStats(Address),
+    /// Issue #115: Count of invoices by state
+    InvoiceStateCount(crate::invoice::InvoiceStatus),
 }
 
 // ----------------------------------------------------------------
@@ -101,6 +103,16 @@ pub fn set_paused(env: &Env, paused: bool) {
 
 pub fn save_invoice(env: &Env, invoice: &Invoice) {
     let key = DataKey::Invoice(invoice.id);
+    
+    if let Some(old_invoice) = env.storage().persistent().get::<_, Invoice>(&key) {
+        if old_invoice.status != invoice.status {
+            decrement_state_count(env, &old_invoice.status);
+            increment_state_count(env, &invoice.status);
+        }
+    } else {
+        increment_state_count(env, &invoice.status);
+    }
+    
     env.storage().persistent().set(&key, invoice);
     env.storage()
         .persistent()
@@ -311,6 +323,35 @@ pub fn increment_total_paid(env: &Env) {
     env.storage()
         .persistent()
         .set(&DataKey::TotalPaid, &(current + 1));
+}
+
+pub fn get_state_count(env: &Env, state: &crate::invoice::InvoiceStatus) -> u64 {
+    env.storage()
+        .persistent()
+        .get(&DataKey::InvoiceStateCount(state.clone()))
+        .unwrap_or(0)
+}
+
+pub fn increment_state_count(env: &Env, state: &crate::invoice::InvoiceStatus) {
+    let current = get_state_count(env, state);
+    env.storage()
+        .persistent()
+        .set(&DataKey::InvoiceStateCount(state.clone()), &(current + 1));
+}
+
+pub fn decrement_state_count(env: &Env, state: &crate::invoice::InvoiceStatus) {
+    let current = get_state_count(env, state);
+    if current > 0 {
+        let new_val = current - 1;
+        let key = DataKey::InvoiceStateCount(state.clone());
+        if new_val == 0 {
+            if env.storage().persistent().has(&key) {
+                env.storage().persistent().remove(&key);
+            }
+        } else {
+            env.storage().persistent().set(&key, &new_val);
+        }
+    }
 }
 
 pub fn add_volume(

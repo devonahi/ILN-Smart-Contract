@@ -43,6 +43,8 @@ mod tests_lp_whitelist;
 mod tests_multisig_admin;
 #[cfg(test)]
 mod tests_lp_portfolio_stats;
+#[cfg(test)]
+mod tests_counter;
 
 pub use crate::invoice::{
     AppealRecord, Invoice, InvoiceParams, InvoiceStatus, LpFundRequest, LPStats, ReputationProfile,
@@ -754,6 +756,24 @@ impl InvoiceLiquidityContract {
     /// Access: Anyone
     pub fn get_lp_portfolio_stats(env: Env, lp: Address) -> LPStats {
         storage_get_lp_portfolio_stats(&env, &lp)
+    }
+
+    // ------------------------------------------------------------
+    // get_invoice_count (O(1) counter view) — Issue #115
+    // ------------------------------------------------------------
+    /// Return the total number of invoices, or the count of invoices currently
+    /// in a specific state.
+    /// Access: Anyone
+    pub fn get_invoice_count(env: Env, state: Option<InvoiceStatus>) -> u64 {
+        match state {
+            None => {
+                env.storage()
+                    .persistent()
+                    .get(&DataKey::TotalInvoices)
+                    .unwrap_or(0)
+            }
+            Some(status) => crate::storage::get_state_count(&env, &status),
+        }
     }
 
     // ------------------------------------------------------------

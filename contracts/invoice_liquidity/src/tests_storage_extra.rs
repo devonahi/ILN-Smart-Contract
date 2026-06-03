@@ -14,7 +14,7 @@ fn test_invoice_storage_roundtrip_u32_timestamps() {
         id: 42,
         freelancer: t.freelancer.clone(),
         payer: t.payer.clone(),
-        token: t.token.address.clone(),
+        token: t.token.clone(),
         amount: 1_000_000_000,
         due_date: 1_700_000_000u64.try_into().unwrap(),
         discount_rate: 300,

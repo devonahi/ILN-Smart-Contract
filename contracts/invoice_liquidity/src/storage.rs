@@ -1,7 +1,7 @@
 use soroban_sdk::{contracttype, Address, Env, BytesN};
 
 use crate::config::Config;
-use crate::invoice::{AppealRecord, Invoice, LpFundRequest, ReputationScore};
+use crate::invoice::{AppealRecord, Invoice, LpFundRequest, ReputationScore, ContractStats};
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,9 +17,12 @@ pub enum DataKey {
     Paused,
     /// Minimum payer reputation required to fund an invoice (Issue #28). Default 0.
     MinPayerReputation,
+    /// auto-increment counter for IDs (moved to instance for optimization)
     /// Reentrancy guard lock flag
     ReentrancyLock,
     NextInvoiceId,
+    /// ContractStats struct (Issue #optimization)
+    Stats,
     /// Issue #124: Multi-sig admin configuration
     MultisigAdmin,
     /// Issue #124: Proposal counter for unique IDs
@@ -27,7 +30,7 @@ pub enum DataKey {
 
     // Persistent Storage
     Invoice(u64),
-    InvoiceCount,
+    InvoiceCount, // Legacy, moved to NextInvoiceId in instance
     Token,
     PayerScore(Address),
     InvoiceFunders(u64),
@@ -41,7 +44,7 @@ pub enum DataKey {
     FundQueue(u64),
     QueueResolution(u64),
 
-    // Stats (Persistent)
+    // Legacy Stats (Persistent)
     TotalInvoices,
     TotalFunded,
     TotalPaid,
@@ -99,6 +102,7 @@ pub fn set_paused(env: &Env, paused: bool) {
     env.storage().instance().set(&DataKey::Paused, &paused);
 }
 
+pub fn get_min_payer_reputation(env: &Env) -> u32 {
 // ----------------------------------------------------------------
 // Invoice Helpers
 // ----------------------------------------------------------------
@@ -117,20 +121,20 @@ pub fn save_invoice(env: &Env, invoice: &Invoice) {
     
     env.storage().persistent().set(&key, invoice);
     env.storage()
-        .persistent()
-        .extend_ttl(&key, 1_000_000, 2_000_000);
+        .instance()
+        .get(&DataKey::MinPayerReputation)
+        .unwrap_or(0)
 }
 
-pub fn load_invoice(env: &Env, id: u64) -> Invoice {
+pub fn set_min_payer_reputation(env: &Env, value: u32) {
     env.storage()
-        .persistent()
-        .get(&DataKey::Invoice(id))
-        .expect("invoice not found")
+        .instance()
+        .set(&DataKey::MinPayerReputation, &value);
 }
 
-pub fn invoice_exists(env: &Env, id: u64) -> bool {
-    env.storage().persistent().has(&DataKey::Invoice(id))
-}
+// ----------------------------------------------------------------
+// Invoice Helpers
+// ----------------------------------------------------------------
 
 pub fn read_next_invoice_id(env: &Env) -> u64 {
     env.storage()
@@ -144,19 +148,19 @@ pub fn write_next_invoice_id(env: &Env, id: u64) {
 }
 
 pub fn next_invoice_id(env: &Env) -> Result<u64, crate::errors::ContractError> {
+    next_invoice_ids(env, 1)
+}
+
+pub fn next_invoice_ids(env: &Env, count: u32) -> Result<u64, crate::errors::ContractError> {
     let current_id = read_next_invoice_id(env);
     let next_id = current_id
-        .checked_add(1)
+        .checked_add(count as u64)
         .ok_or(crate::errors::ContractError::ArithmeticOverflow)?;
 
     write_next_invoice_id(env, next_id);
 
     Ok(current_id)
 }
-
-// ----------------------------------------------------------------
-// Funder List Helpers
-// ----------------------------------------------------------------
 
 pub fn get_invoice_funders(env: &Env, id: u64) -> soroban_sdk::Vec<(Address, i128)> {
     env.storage()
@@ -170,74 +174,6 @@ pub fn save_invoice_funders(env: &Env, id: u64, funders: &soroban_sdk::Vec<(Addr
         .persistent()
         .set(&DataKey::InvoiceFunders(id), funders);
 }
-
-// ----------------------------------------------------------------
-// Reputation Helpers
-// ----------------------------------------------------------------
-
-pub fn get_payer_score(env: &Env, payer: &Address) -> u32 {
-    match env
-        .storage()
-        .persistent()
-        .get::<DataKey, ReputationScore>(&DataKey::PayerScore(payer.clone()))
-    {
-        Some(mut rep) => {
-            if let Some(decay_config) = get_config(env) {
-                let current_ledger = env.ledger().sequence() as u64;
-                let ledgers_since_activity =
-                    current_ledger.saturating_sub(rep.last_activity_ledger.into());
-
-                if ledgers_since_activity >= decay_config.decay_period_ledgers
-                    && decay_config.decay_period_ledgers > 0
-                    && decay_config.decay_rate_bps > 0
-                {
-                    let periods_passed = ledgers_since_activity / decay_config.decay_period_ledgers;
-                    let mut decayed_score = rep.score as u64;
-                    for _ in 0..periods_passed {
-                        let decay_amount =
-                            (decayed_score * decay_config.decay_rate_bps as u64) / 10_000;
-                        decayed_score = decayed_score.saturating_sub(decay_amount);
-                    }
-                    rep.score = (decayed_score.min(100)) as u32;
-                }
-            }
-            rep.score
-        }
-        None => 50,
-    }
-}
-
-pub fn set_payer_score(env: &Env, payer: &Address, score: u32) {
-    let score = score.min(100);
-    // Note: To preserve `last_activity_ledger`, we should actually retrieve the old Rep or create a new one.
-    // In `invoice.rs` the old function was `set_payer_score(env: &Env, payer: &Address, score: u32) { env.storage().persistent().set(..., &rep) }` which didn't compile correctly in the snippet I saw (`&rep` not defined). Let's fix that.
-    let current_ledger = env.ledger().sequence() as u64;
-    let rep = ReputationScore {
-        score,
-        last_activity_ledger: current_ledger as u32,
-    };
-    env.storage()
-        .persistent()
-        .set(&DataKey::PayerScore(payer.clone()), &rep);
-}
-
-pub fn get_lp_score(env: &Env, lp: &Address) -> u32 {
-    env.storage()
-        .persistent()
-        .get(&DataKey::LpScore(lp.clone()))
-        .unwrap_or(50)
-}
-
-pub fn set_lp_score(env: &Env, lp: &Address, score: u32) {
-    let score = score.min(100);
-    env.storage()
-        .persistent()
-        .set(&DataKey::LpScore(lp.clone()), &score);
-}
-
-// ----------------------------------------------------------------
-// LP Queue Helpers
-// ----------------------------------------------------------------
 
 pub fn get_fund_queue(env: &Env, invoice_id: u64) -> soroban_sdk::Vec<LpFundRequest> {
     env.storage()
@@ -264,10 +200,6 @@ pub fn save_queue_resolution(env: &Env, invoice_id: u64, approved_lp: &Address) 
         .set(&DataKey::QueueResolution(invoice_id), approved_lp);
 }
 
-// ----------------------------------------------------------------
-// Appeal Helpers
-// ----------------------------------------------------------------
-
 pub fn get_appeal(env: &Env, invoice_id: u64) -> Option<AppealRecord> {
     env.storage().persistent().get(&DataKey::Appeal(invoice_id))
 }
@@ -290,32 +222,24 @@ pub fn get_pre_default_payer_score(env: &Env, invoice_id: u64) -> Option<u32> {
         .get(&DataKey::PreDefaultPayerScore(invoice_id))
 }
 
-// ----------------------------------------------------------------
-// Contract Stats Helpers
-// ----------------------------------------------------------------
-
-pub fn increment_total_invoices(env: &Env) {
-    let current: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::TotalInvoices)
-        .unwrap_or(0);
+pub fn get_contract_stats(env: &Env) -> ContractStats {
     env.storage()
-        .persistent()
-        .set(&DataKey::TotalInvoices, &(current + 1));
+        .instance()
+        .get(&DataKey::Stats)
+        .unwrap_or_else(|| ContractStats {
+            total_invoices: 0,
+            total_funded: 0,
+            total_paid: 0,
+            total_volume_usdc: 0,
+            total_volume_eurc: 0,
+            total_volume_xlm: 0,
+            token_volumes: soroban_sdk::Vec::new(env),
+            total_volume_usd_normalized: 0,
+        })
 }
 
-pub fn increment_total_funded(env: &Env) {
-    let current: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::TotalFunded)
-        .unwrap_or(0);
-    env.storage()
-        .persistent()
-        .set(&DataKey::TotalFunded, &(current + 1));
-}
-
+pub fn save_contract_stats(env: &Env, stats: &ContractStats) {
+    env.storage().instance().set(&DataKey::Stats, stats);
 pub fn increment_total_paid(env: &Env) {
     let current: u64 = env
         .storage()

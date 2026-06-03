@@ -1,5 +1,6 @@
 use crate::errors::ContractError;
-use crate::invoice::{get_invoice_funders, invoice_exists, load_invoice, StorageKey};
+use crate::invoice::{invoice_exists, load_invoice};
+use crate::storage::{get_invoice_funders, DataKey as StorageKey};
 use soroban_sdk::{Address, Env};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -44,6 +44,11 @@ fn setup_xlm_env() -> (
     let usdc_contract_id = env.register_stellar_asset_contract_v2(usdc_admin.clone());
     let usdc_address = usdc_contract_id.address();
 
+    // Deploy EURC token (6 decimals)
+    let eurc_admin = Address::generate(&env);
+    let eurc_contract_id = env.register_stellar_asset_contract_v2(eurc_admin.clone());
+    let eurc_address = eurc_contract_id.address();
+
     // Deploy XLM SAC (7 decimals - native XLM wrapper)
     let xlm_admin = Address::generate(&env);
     let xlm_contract_id = env.register_stellar_asset_contract_v2(xlm_admin);
@@ -53,8 +58,8 @@ fn setup_xlm_env() -> (
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let client = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
-    // Initialize contract with USDC and XLM
-    client.initialize(&admin, &usdc_address, &xlm_address);
+    // Initialize contract with USDC, EURC and XLM
+    client.initialize(&admin, &usdc_address, &eurc_address, &xlm_address);
 
     (env, admin, usdc_address, xlm_address, contract_id, client)
 }
@@ -277,6 +282,7 @@ fn test_mixed_token_operations() {
             &due_date,
             &discount_rate,
             &usdc_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     usdc_admin.mint(&funder, &USDC_INVOICE_AMOUNT);
@@ -292,6 +298,7 @@ fn test_mixed_token_operations() {
             &due_date,
             &discount_rate,
             &xlm_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
@@ -323,6 +330,7 @@ fn test_xlm_precision_in_calculations() {
             &due_date,
             &discount_rate,
             &xlm_address,
+            &Option::<soroban_sdk::BytesN<32>>::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);

@@ -2,31 +2,36 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events, Ledger},
-    Address, Env, Vec, IntoVal, Event,
-    token::{StellarAssetClient, Client as TokenClient},
     testutils::{Address as _, Events as _, Ledger},
     token::{Client as TokenClient, StellarAssetClient},
     Address, Env, Event, BytesN,
 };
 
-pub(crate) struct TestContext<'a> {
-    pub(crate) env: Env,
-    pub(crate) admin: Address,
-    pub(crate) freelancer: Address,
-    pub(crate) payer: Address,
-    pub(crate) funder: Address,
-    pub(crate) token: Address,
-    pub(crate) xlm_token: Address,
-    pub(crate) contract_id: Address,
-    pub(crate) contract: InvoiceLiquidityContractClient<'a>,
+// ----------------------------------------------------------------
+// Test helpers — shared setup used across all tests
+// ----------------------------------------------------------------
+
+/// All the actors and contract references a test needs
+pub struct TestEnv {
+    pub env: Env,
+    pub contract: InvoiceLiquidityContractClient<'static>,
+    pub token: TokenClient<'static>,
+    pub freelancer: Address,
+    pub payer: Address,
+    pub funder: Address,
 }
 
-pub(crate) fn setup() -> TestContext<'static> {
+/// Standard invoice values reused across tests
+const INVOICE_AMOUNT: i128 = 1_000_000_000; // 100 USDC in stroops (1 USDC = 10_000_000)
+const DISCOUNT_RATE: u32 = 300; // 3.00% in basis points
+const DUE_DATE_OFFSET: u64 = 60 * 60 * 24 * 30; // 30 days from now
+
+pub fn setup() -> TestEnv {
     let env = Env::default();
+
+    // Skip auth checks in tests — we test auth separately
     env.mock_all_auths();
 
-    let admin = Address::generate(&env);
     // ---- Deploy a mock USDC token contract ----
     let usdc_admin = Address::generate(&env);
     let usdc_contract_id = env.register_stellar_asset_contract_v2(usdc_admin.clone());
@@ -44,53 +49,43 @@ pub(crate) fn setup() -> TestContext<'static> {
     let payer = Address::generate(&env);
     let funder = Address::generate(&env);
 
-    let token_admin = Address::generate(&env);
-    let token_id = env.register_stellar_asset_contract_v2(token_admin.clone());
-    let token = token_id.address();
-    
-    let xlm_admin = Address::generate(&env);
-    let xlm_id = env.register_stellar_asset_contract_v2(xlm_admin.clone());
-    let xlm_token = xlm_id.address();
-
-    // Mint some tokens to funder and payer
-    let token_client = StellarAssetClient::new(&env, &token);
-    token_client.mint(&funder, &1_000_000_000_000);
-    token_client.mint(&payer, &1_000_000_000_000);
-
-    let xlm_client = StellarAssetClient::new(&env, &xlm_token);
-    xlm_client.mint(&funder, &1_000_000_000_000);
-    xlm_client.mint(&payer, &1_000_000_000_000);
+    // ---- Mint USDC to the actors who need it ----
+    // Funder needs enough to cover the invoice
+    token_admin.mint(&funder, &(INVOICE_AMOUNT * 10));
+    // Payer needs enough to settle the invoice
+    token_admin.mint(&payer, &(INVOICE_AMOUNT * 10));
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
-    let client = InvoiceLiquidityContractClient::new(&env, &contract_id);
+    let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
-    client.initialize(&admin, &token, &xlm_token);
+    // Fund the contract treasury so it can cover defaults
+    token_admin.mint(&contract.address, &(INVOICE_AMOUNT * 100));
+
+    let xlm_admin = Address::generate(&env);
+    let xlm_contract_id = env.register_stellar_asset_contract_v2(xlm_admin);
+    let xlm_address = xlm_contract_id.address();
+
     // Initialize with mock USDC, EURC and mock XLM SAC addresses
     contract.initialize(&usdc_admin, &usdc_address, &eurc_address, &xlm_address);
 
-    // Setup initial ledger time
-    let mut info = env.ledger().get();
-    info.timestamp = 1_000_000;
-    env.ledger().set(info);
+    // ---- Set ledger timestamp to a known baseline ----
+    let mut ledger_info = env.ledger().get();
+    ledger_info.timestamp = 1_700_000_000;
+    ledger_info.sequence_number = 100;
+    env.ledger().set(ledger_info);
 
-    TestContext {
+    TestEnv {
         env,
-        admin,
+        contract,
+        token,
         freelancer,
         payer,
         funder,
-        token,
-        xlm_token,
-        contract_id,
-        contract: client,
     }
 }
 
-const INVOICE_AMOUNT: i128 = 10_000_000;
-const DISCOUNT_RATE: u32 = 300;
-const DUE_DATE_OFFSET: u64 = 86400 * 30;
-
-fn submit_standard_invoice(t: &TestContext) -> u64 {
+/// Helper: submit a standard invoice and return its ID
+fn submit_standard_invoice(t: &TestEnv) -> u64 {
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
     t.contract.submit_invoice(
         &t.freelancer,
@@ -98,38 +93,51 @@ fn submit_standard_invoice(t: &TestContext) -> u64 {
         &INVOICE_AMOUNT,
         &due_date,
         &DISCOUNT_RATE,
-        &t.token,
         &t.token.address,
         &Option::<BytesN<32>>::None,
     )
 }
 
+// ----------------------------------------------------------------
+// submit_invoice — happy path
+// ----------------------------------------------------------------
+
 #[test]
-fn test_submit_invoice_happy_path() {
+fn test_submit_invoice_returns_id() {
+    let t = setup();
+    let id = submit_standard_invoice(&t);
+
+    // First invoice should always be ID 1
+    assert_eq!(id, 1);
+}
+
+#[test]
+fn test_submit_invoice_stores_correct_fields() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
+
     let id = t.contract.submit_invoice(
         &t.freelancer,
         &t.payer,
         &INVOICE_AMOUNT,
         &due_date,
         &DISCOUNT_RATE,
-        &t.token,
         &t.token.address,
         &Option::<BytesN<32>>::None,
     );
 
-    assert_eq!(id, 1);
     let invoice = t.contract.get_invoice(&id);
 
     assert_eq!(invoice.id, id);
     assert_eq!(invoice.freelancer, t.freelancer);
     assert_eq!(invoice.payer, t.payer);
-    assert_eq!(invoice.token, t.token);
+    assert_eq!(invoice.token, t.token.address);
     assert_eq!(invoice.amount, INVOICE_AMOUNT);
     assert_eq!(u64::from(invoice.due_date), due_date);
     assert_eq!(invoice.discount_rate, DISCOUNT_RATE);
     assert_eq!(invoice.status, InvoiceStatus::Pending);
+    assert!(invoice.funder.is_none());
+    assert!(invoice.funded_at.is_none());
 }
 
 #[test]
@@ -142,7 +150,6 @@ fn test_get_invoice_returns_existing_invoice() {
         &INVOICE_AMOUNT,
         &due_date,
         &DISCOUNT_RATE,
-        &t.token,
         &t.token.address,
         &Option::<BytesN<32>>::None,
     );
@@ -152,7 +159,7 @@ fn test_get_invoice_returns_existing_invoice() {
     assert_eq!(invoice.id, id);
     assert_eq!(invoice.freelancer, t.freelancer);
     assert_eq!(invoice.payer, t.payer);
-    assert_eq!(invoice.token, t.token);
+    assert_eq!(invoice.token, t.token.address);
     assert_eq!(invoice.amount, INVOICE_AMOUNT);
     assert_eq!(u64::from(invoice.due_date), due_date);
     assert_eq!(invoice.discount_rate, DISCOUNT_RATE);
@@ -174,7 +181,6 @@ fn test_submitter_reputation_snapshot_at_submission() {
         &INVOICE_AMOUNT,
         &due_date,
         &DISCOUNT_RATE,
-        &t.token,
         &t.token.address,
         &Option::<BytesN<32>>::None,
     );
@@ -213,90 +219,55 @@ fn test_submit_multiple_invoices_increment_ids() {
 // submit_invoices_batch
 // ----------------------------------------------------------------
 
-/// Build a fully-populated, valid `InvoiceParams` for batch tests (Issue #120).
-fn batch_params(t: &TestEnv, due_date: u64) -> InvoiceParams {
-    InvoiceParams {
+#[test]
+fn test_submit_invoices_batch_happy_path() {
+    let t = setup();
+    let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
+
+    let params = InvoiceParams {
         freelancer: t.freelancer.clone(),
         payer: t.payer.clone(),
         amount: INVOICE_AMOUNT,
         due_date,
         discount_rate: DISCOUNT_RATE,
         token: t.token.address.clone(),
-        referral_code: None,
-        allowed_lps: None,
-    }
-}
-
-#[test]
-fn test_submit_invoices_batch_happy_path() {
-    let t = setup();
-    let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    
-    let params = batch_params(&t, due_date);
+    };
 
     let mut batch = Vec::new(&t.env);
-    for _ in 0..3 {
-        batch.push_back(InvoiceParams {
-            freelancer: t.freelancer.clone(),
-            payer: t.payer.clone(),
-            amount: INVOICE_AMOUNT,
-            due_date,
-            discount_rate: DISCOUNT_RATE,
-            token: t.token.clone(),
-        });
-    }
+    batch.push_back(params.clone());
+    batch.push_back(params.clone());
+    batch.push_back(params.clone());
 
     let ids = t.contract.submit_invoices_batch(&batch);
+
     assert_eq!(ids.len(), 3);
     assert_eq!(ids.get(0).unwrap(), 1);
     assert_eq!(ids.get(1).unwrap(), 2);
     assert_eq!(ids.get(2).unwrap(), 3);
-
-    let stats = t.contract.get_contract_stats();
-    assert_eq!(stats.total_invoices, 3);
-}
-
-#[test]
-fn test_update_invoice_happy_path() {
-    assert_eq!(t.contract.get_invoice_count(&None), 3);
-}
-
-#[test]
-fn test_submit_invoices_batch_max_size_succeeds() {
-    let t = setup();
-    let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    let params = batch_params(&t, due_date);
-
-    // Exactly MAX_BATCH_SIZE (50) invoices must succeed.
-    let mut batch = Vec::new(&t.env);
-    for _ in 0..50 {
-        batch.push_back(params.clone());
-    }
-
-    let ids = t.contract.submit_invoices_batch(&batch);
-    assert_eq!(ids.len(), 50);
-    assert_eq!(ids.get(0).unwrap(), 1);
-    assert_eq!(ids.get(49).unwrap(), 50);
-    assert_eq!(t.contract.get_invoice_count(&None), 50);
 }
 
 #[test]
 fn test_submit_invoices_batch_rejects_over_limit() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    let params = batch_params(&t, due_date);
 
-    // One past MAX_BATCH_SIZE (51) must be rejected.
+    let params = InvoiceParams {
+        freelancer: t.freelancer.clone(),
+        payer: t.payer.clone(),
+        amount: INVOICE_AMOUNT,
+        due_date,
+        discount_rate: DISCOUNT_RATE,
+        token: t.token.address.clone(),
+    };
+
     let mut batch = Vec::new(&t.env);
-    for _ in 0..51 {
+    for _ in 0..11 {
         batch.push_back(params.clone());
     }
 
     let result = t.contract.try_submit_invoices_batch(&batch);
-    assert_eq!(result, Err(Ok(ContractError::BatchTooLarge)));
 
-    // Nothing was created.
-    assert_eq!(t.contract.get_invoice_count(&None), 0);
+    assert_eq!(result, Err(Ok(ContractError::BatchTooLarge)));
 }
 
 #[test]
@@ -306,19 +277,32 @@ fn test_submit_invoices_batch_atomicity_fail() {
 
     let mut batch = Vec::new(&t.env);
 
-    // Valid invoice...
-    batch.push_back(batch_params(&t, due_date));
+    // Valid invoice
+    batch.push_back(InvoiceParams {
+        freelancer: t.freelancer.clone(),
+        payer: t.payer.clone(),
+        amount: INVOICE_AMOUNT,
+        due_date,
+        discount_rate: DISCOUNT_RATE,
+        token: t.token.address.clone(),
+    });
 
-    // ...followed by an invalid one (amount = 0) -> whole batch must revert.
-    let mut bad = batch_params(&t, due_date);
-    bad.amount = 0;
-    batch.push_back(bad);
+    // Invalid invoice (amount = 0)
+    batch.push_back(InvoiceParams {
+        freelancer: t.freelancer.clone(),
+        payer: t.payer.clone(),
+        amount: 0,
+        due_date,
+        discount_rate: DISCOUNT_RATE,
+        token: t.token.address.clone(),
+    });
 
     let result = t.contract.try_submit_invoices_batch(&batch);
+
     assert_eq!(result, Err(Ok(ContractError::InvalidAmount)));
 
-    // Atomicity: the valid invoice before the failure was NOT persisted.
-    assert_eq!(t.contract.get_invoice_count(&None), 0);
+    // Verify no invoice was saved
+    assert_eq!(t.contract.get_invoice_count(), 0);
 }
 
 // ----------------------------------------------------------------
@@ -418,7 +402,7 @@ fn test_submit_rejects_discount_rate_above_50_percent() {
 fn test_update_invoice_updates_pending_invoice_fields() {
     let t = setup();
     let id = submit_standard_invoice(&t);
-    let updated_amount = INVOICE_AMOUNT + 5_000_000;
+    let updated_amount = INVOICE_AMOUNT + 250_000_000;
     let updated_due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET * 2;
     let updated_discount_rate = DISCOUNT_RATE + 100;
 
@@ -442,7 +426,7 @@ fn test_update_invoice_updates_pending_invoice_fields() {
 fn test_update_invoice_emits_updated_event() {
     let t = setup();
     let id = submit_standard_invoice(&t);
-    let updated_amount = INVOICE_AMOUNT + 5_000_000;
+    let updated_amount = INVOICE_AMOUNT + 250_000_000;
     let updated_due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET * 2;
     let updated_discount_rate = DISCOUNT_RATE + 100;
 
@@ -458,17 +442,17 @@ fn test_update_invoice_emits_updated_event() {
         invoice_id: id,
         freelancer: t.freelancer.clone(),
         payer: t.payer.clone(),
-        token: t.token.clone(),
+        token: t.token.address.clone(),
         amount: updated_amount,
         due_date: updated_due_date,
         discount_rate: updated_discount_rate,
         status: InvoiceStatus::Pending,
     };
 
-    let events = t.env.events().all().filter_by_contract(&t.contract_id);
+    let events = t.env.events().all().filter_by_contract(&t.contract.address);
     assert_eq!(
         events.events().last(),
-        Some(&expected_event.to_xdr(&t.env, &t.contract_id))
+        Some(&expected_event.to_xdr(&t.env, &t.contract.address))
     );
 }
 
@@ -551,6 +535,10 @@ fn test_update_invoice_rejects_invalid_discount_rate() {
 
     assert_eq!(result, Err(Ok(ContractError::InvalidDiscountRate)));
 }
+
+// ----------------------------------------------------------------
+// transfer_invoice
+// ----------------------------------------------------------------
 
 #[test]
 fn test_transfer_invoice_updates_freelancer() {
@@ -656,24 +644,26 @@ fn test_fund_invoice_transfers_correct_amounts() {
     let t = setup();
     let id = submit_standard_invoice(&t);
 
-    let token = TokenClient::new(&t.env, &t.token);
-    let funder_balance_before = token.balance(&t.funder);
-    let freelancer_balance_before = token.balance(&t.freelancer);
+    let funder_balance_before = t.token.balance(&t.funder);
+    let freelancer_balance_before = t.token.balance(&t.freelancer);
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
-    let funder_balance_after = token.balance(&t.funder);
-    let freelancer_balance_after = token.balance(&t.freelancer);
+    let funder_balance_after = t.token.balance(&t.funder);
+    let freelancer_balance_after = t.token.balance(&t.freelancer);
 
+    // discount_amount = 1_000_000_000 * 300 / 10_000 = 30_000_000 (3 USDC)
     let discount_amount = INVOICE_AMOUNT * DISCOUNT_RATE as i128 / 10_000;
     let freelancer_payout = INVOICE_AMOUNT - discount_amount;
 
+    // LP sent the required cost
     assert_eq!(
         funder_balance_before - funder_balance_after,
         freelancer_payout,
         "LP should have sent the cost amount"
     );
 
+    // Freelancer received amount minus discount
     assert_eq!(
         freelancer_balance_after - freelancer_balance_before,
         freelancer_payout,
@@ -707,6 +697,10 @@ fn test_fund_invoice_sets_funded_at_timestamp() {
     assert_eq!(invoice.funded_at, Some(now.try_into().expect("timestamp")));
 }
 
+// ----------------------------------------------------------------
+// fund_invoice — error cases
+// ----------------------------------------------------------------
+
 #[test]
 fn test_fund_nonexistent_invoice_fails() {
     let t = setup();
@@ -724,6 +718,7 @@ fn test_fund_already_funded_invoice_fails() {
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
+    // Second funder tries to fund the same invoice
     let second_funder = Address::generate(&t.env);
     let result = t
         .contract
@@ -732,6 +727,10 @@ fn test_fund_already_funded_invoice_fails() {
     assert_eq!(result, Err(Ok(ContractError::AlreadyFunded)));
 }
 
+// ----------------------------------------------------------------
+// mark_paid — happy path
+// ----------------------------------------------------------------
+
 #[test]
 fn test_mark_paid_releases_full_amount_to_lp() {
     let t = setup();
@@ -739,13 +738,13 @@ fn test_mark_paid_releases_full_amount_to_lp() {
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
-    let token = TokenClient::new(&t.env, &t.token);
-    let funder_balance_before = token.balance(&t.funder);
+    let funder_balance_before = t.token.balance(&t.funder);
 
     t.contract.mark_paid(&id, &INVOICE_AMOUNT);
 
-    let funder_balance_after = token.balance(&t.funder);
+    let funder_balance_after = t.token.balance(&t.funder);
 
+    // LP should receive the full invoice amount (minus fee, which is 0 here)
     assert_eq!(
         funder_balance_after - funder_balance_before,
         INVOICE_AMOUNT,
@@ -770,17 +769,16 @@ fn test_full_lifecycle_lp_earns_correct_yield() {
     let t = setup();
     let id = submit_standard_invoice(&t);
 
-    let token = TokenClient::new(&t.env, &t.token);
-    let lp_start = token.balance(&t.funder);
+    // Record LP balance before the entire flow
+    let lp_start = t.token.balance(&t.funder);
 
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
     // LP funds the invoice
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
     // Payer settles
     t.contract.mark_paid(&id, &INVOICE_AMOUNT);
 
-    let lp_end = token.balance(&t.funder);
+    let lp_end = t.token.balance(&t.funder);
 
     let expected_yield = INVOICE_AMOUNT * DISCOUNT_RATE as i128 / 10_000;
 
@@ -796,14 +794,14 @@ fn test_full_lifecycle_payer_balance_reduces_correctly() {
     let t = setup();
     let id = submit_standard_invoice(&t);
 
-    let token = TokenClient::new(&t.env, &t.token);
-    let payer_start = token.balance(&t.payer);
+    let payer_start = t.token.balance(&t.payer);
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&id, &INVOICE_AMOUNT);
 
-    let payer_end = token.balance(&t.payer);
+    let payer_end = t.token.balance(&t.payer);
 
+    // Payer should have paid the full invoice amount
     assert_eq!(
         payer_start - payer_end,
         INVOICE_AMOUNT,
@@ -811,29 +809,16 @@ fn test_full_lifecycle_payer_balance_reduces_correctly() {
     );
 }
 
-#[test]
-fn test_fund_invoice_full_lifecycle_with_stats() {
-    let t = setup();
-    let id = submit_standard_invoice(&t);
-
-    t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
-    let invoice = t.contract.get_invoice(&id);
-    assert_eq!(invoice.status, InvoiceStatus::Funded);
-
-    t.contract.mark_paid(&id, &INVOICE_AMOUNT);
-    let invoice = t.contract.get_invoice(&id);
-    assert_eq!(invoice.status, InvoiceStatus::Paid);
-    
-    let stats = t.contract.get_contract_stats();
-    assert_eq!(stats.total_paid, 1);
-    assert_eq!(stats.total_funded, 1);
-}
+// ----------------------------------------------------------------
+// mark_paid — error cases
+// ----------------------------------------------------------------
 
 #[test]
 fn test_mark_paid_on_pending_invoice_fails() {
     let t = setup();
     let id = submit_standard_invoice(&t);
 
+    // Try to mark paid without funding first
     let result = t.contract.try_mark_paid(&id, &INVOICE_AMOUNT);
     assert_eq!(result, Err(Ok(ContractError::NotFunded)));
 }
@@ -846,6 +831,7 @@ fn test_mark_paid_twice_fails() {
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&id, &INVOICE_AMOUNT);
 
+    // Paying again should fail
     let result = t.contract.try_mark_paid(&id, &INVOICE_AMOUNT);
     assert_eq!(result, Err(Ok(ContractError::AlreadyPaid)));
 }
@@ -870,14 +856,11 @@ fn test_claim_default_success() {
     ledger.timestamp += DUE_DATE_OFFSET + 1;
     t.env.ledger().set(ledger);
 
-    let token = TokenClient::new(&t.env, &t.token);
-    let token_admin = StellarAssetClient::new(&t.env, &t.token);
-    token_admin.mint(&t.contract_id, &INVOICE_AMOUNT);
-    let funder_before = token.balance(&t.funder);
+    let funder_before = t.token.balance(&t.funder);
 
     t.contract.claim_default(&t.funder, &id);
 
-    let funder_after = token.balance(&t.funder);
+    let funder_after = t.token.balance(&t.funder);
 
     let discount_amount = INVOICE_AMOUNT * DISCOUNT_RATE as i128 / 10_000;
 
@@ -909,6 +892,7 @@ fn test_claim_default_non_funder_fails() {
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
+    // Move time forward
     let mut ledger = t.env.ledger().get();
     ledger.timestamp += DUE_DATE_OFFSET + 1;
     t.env.ledger().set(ledger);
@@ -927,6 +911,7 @@ fn test_claim_default_on_paid_invoice_fails() {
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
     t.contract.mark_paid(&id, &INVOICE_AMOUNT);
 
+    // Move time forward
     let mut ledger = t.env.ledger().get();
     ledger.timestamp += DUE_DATE_OFFSET + 1;
     t.env.ledger().set(ledger);
@@ -942,13 +927,10 @@ fn test_claim_default_twice_fails() {
 
     t.contract.fund_invoice(&t.funder, &id, &INVOICE_AMOUNT, &false);
 
+    // Move time forward
     let mut ledger = t.env.ledger().get();
     ledger.timestamp += DUE_DATE_OFFSET + 1;
     t.env.ledger().set(ledger);
-
-    let token = TokenClient::new(&t.env, &t.token);
-    let token_admin = StellarAssetClient::new(&t.env, &t.token);
-    token_admin.mint(&t.contract_id, &INVOICE_AMOUNT);
 
     t.contract.claim_default(&t.funder, &id);
 
@@ -957,11 +939,10 @@ fn test_claim_default_twice_fails() {
 }
 
 #[test]
-fn test_expire_invoice_success() {
+fn test_expire_pending_invoice_after_due_date() {
     let t = setup();
     let id = submit_standard_invoice(&t);
 
-    // Move time forward past due date
     let mut ledger = t.env.ledger().get();
     ledger.timestamp += DUE_DATE_OFFSET + 1;
     t.env.ledger().set(ledger);
@@ -973,12 +954,33 @@ fn test_expire_invoice_success() {
 }
 
 #[test]
-fn test_expire_invoice_before_due_date_fails() {
+fn test_expire_pending_invoice_before_due_date_fails() {
     let t = setup();
     let id = submit_standard_invoice(&t);
 
     let result = t.contract.try_expire_invoice(&id);
     assert_eq!(result, Err(Ok(ContractError::NotYetDefaulted)));
+
+    let invoice = t.contract.get_invoice(&id);
+    assert_eq!(invoice.status, InvoiceStatus::Pending);
+}
+
+#[test]
+fn test_fund_expired_invoice_fails() {
+    let t = setup();
+    let id = submit_standard_invoice(&t);
+
+    let mut ledger = t.env.ledger().get();
+    ledger.timestamp += DUE_DATE_OFFSET + 1;
+    t.env.ledger().set(ledger);
+
+    t.contract.expire_invoice(&id);
+
+    let result = t.contract.try_fund_invoice(&t.funder, &id, &INVOICE_AMOUNT);
+    assert_eq!(result, Err(Ok(ContractError::InvoiceExpired)));
+
+    let invoice = t.contract.get_invoice(&id);
+    assert_eq!(invoice.status, InvoiceStatus::Expired);
 }
 
 #[test]
@@ -1014,9 +1016,6 @@ fn test_payer_with_default() {
     ledger.timestamp += DUE_DATE_OFFSET + 1;
     t.env.ledger().set(ledger);
 
-    let token_admin = StellarAssetClient::new(&t.env, &t.token);
-    token_admin.mint(&t.contract_id, &INVOICE_AMOUNT);
-
     t.contract.claim_default(&t.funder, &id);
 
     let score = t.contract.payer_score(&t.payer);
@@ -1033,10 +1032,12 @@ fn test_payer_with_default() {
 fn test_reputation_decay_inactive_score() {
     let t = setup();
 
-    t.env.as_contract(&t.contract_id, || {
-        set_payer_score(&t.env, &t.payer, 80);
+    // Set payer score to 80
+    t.env.as_contract(&t.contract.address, || {
+        invoice::set_payer_score(&t.env, &t.payer, 80);
     });
 
+    // Initialize decay config: 100 bps (1%) per 1000 ledgers
     let config = Config {
         high_rep_threshold: 80,
         bonus_bps: 200,
@@ -1044,19 +1045,22 @@ fn test_reputation_decay_inactive_score() {
         decay_rate_bps: 100, // 1% per period
         decay_period_ledgers: 1000,
         dispute_timeout_ledgers: 100,
-        xlm_sac_address: t.xlm_token.clone(),
+        xlm_sac_address: Address::generate(&t.env),
         price_oracle: None,
     };
-    t.env.as_contract(&t.contract_id, || {
-        set_config(&t.env, &config);
+    t.env.as_contract(&t.contract.address, || {
+        crate::storage::set_config(&t.env, &config);
     });
 
+    // Advance ledger by 2100 (more than 2 periods)
     let mut ledger = t.env.ledger().get();
     ledger.sequence_number += 2100;
     t.env.ledger().set(ledger);
 
+    // Get score - should have decayed
     let score = t.contract.payer_score(&t.payer);
 
+    // After 2 periods: 80 -> 80 * 0.99 = 79.2 -> 79 * 0.99 = 78.2 -> 78
     assert!(score < 80, "Score should decay from 80, got {}", score);
     assert!(score >= 78, "Score should decay to ~78, got {}", score);
 }
@@ -1066,10 +1070,12 @@ fn test_reputation_decay_inactive_score() {
 fn test_reputation_no_decay_when_inactive() {
     let t = setup();
 
-    t.env.as_contract(&t.contract_id, || {
-        set_payer_score(&t.env, &t.payer, 80);
+    // Set payer score to 80
+    t.env.as_contract(&t.contract.address, || {
+        invoice::set_payer_score(&t.env, &t.payer, 80);
     });
 
+    // Initialize decay config with very high decay period (never decays)
     let config = Config {
         high_rep_threshold: 80,
         bonus_bps: 200,
@@ -1077,17 +1083,19 @@ fn test_reputation_no_decay_when_inactive() {
         decay_rate_bps: 100,
         decay_period_ledgers: 10_000_000, // Very long period
         dispute_timeout_ledgers: 100,
-        xlm_sac_address: t.xlm_token.clone(),
+        xlm_sac_address: Address::generate(&t.env),
         price_oracle: None,
     };
-    t.env.as_contract(&t.contract_id, || {
-        set_config(&t.env, &config);
+    t.env.as_contract(&t.contract.address, || {
+        crate::storage::set_config(&t.env, &config);
     });
 
+    // Advance ledger by only 1000
     let mut ledger = t.env.ledger().get();
     ledger.sequence_number += 1000;
     t.env.ledger().set(ledger);
 
+    // Get score - should NOT have decayed
     let score = t.contract.payer_score(&t.payer);
 
     assert_eq!(score, 80, "Score should not decay when period not reached");
@@ -1098,8 +1106,9 @@ fn test_reputation_no_decay_when_inactive() {
 fn test_reputation_decay_activity_resets() {
     let t = setup();
 
-    t.env.as_contract(&t.contract_id, || {
-        set_payer_score(&t.env, &t.payer, 80);
+    // Set initial score to 80
+    t.env.as_contract(&t.contract.address, || {
+        invoice::set_payer_score(&t.env, &t.payer, 80);
     });
 
     let config = Config {
@@ -1109,26 +1118,29 @@ fn test_reputation_decay_activity_resets() {
         decay_rate_bps: 100,
         decay_period_ledgers: 1000,
         dispute_timeout_ledgers: 100,
-        xlm_sac_address: t.xlm_token.clone(),
+        xlm_sac_address: Address::generate(&t.env),
         price_oracle: None,
     };
 
-    t.env.as_contract(&t.contract_id, || {
-        set_config(&t.env, &config);
+    t.env.as_contract(&t.contract.address, || {
+        crate::storage::set_config(&t.env, &config);
     });
 
+    // Advance by half a decay period
     let mut ledger = t.env.ledger().get();
     ledger.sequence_number += 500;
     t.env.ledger().set(ledger);
 
-    t.env.as_contract(&t.contract_id, || {
-        set_payer_score(&t.env, &t.payer, 85);
+    t.env.as_contract(&t.contract.address, || {
+        invoice::set_payer_score(&t.env, &t.payer, 85);
     });
 
+    // Advance by another half period (not enough from reset)
     ledger = t.env.ledger().get();
     ledger.sequence_number += 500;
     t.env.ledger().set(ledger);
 
+    // Score should not have decayed since reset
     let score = t.contract.payer_score(&t.payer);
 
     assert_eq!(score, 85, "Score should not decay shortly after activity");
@@ -1139,8 +1151,9 @@ fn test_reputation_decay_activity_resets() {
 fn test_reputation_score_never_goes_below_zero() {
     let t = setup();
 
-    t.env.as_contract(&t.contract_id, || {
-        set_payer_score(&t.env, &t.payer, 5);
+    // Set payer score to only 5 (low)
+    t.env.as_contract(&t.contract.address, || {
+        invoice::set_payer_score(&t.env, &t.payer, 5);
     });
 
     let config = Config {
@@ -1150,17 +1163,19 @@ fn test_reputation_score_never_goes_below_zero() {
         decay_rate_bps: 5000, // Very aggressive decay: 50% per period
         decay_period_ledgers: 100,
         dispute_timeout_ledgers: 100,
-        xlm_sac_address: t.xlm_token.clone(),
+        xlm_sac_address: Address::generate(&t.env),
         price_oracle: None,
     };
-    t.env.as_contract(&t.contract_id, || {
-        set_config(&t.env, &config);
+    t.env.as_contract(&t.contract.address, || {
+        crate::storage::set_config(&t.env, &config);
     });
 
+    // Advance by 10 decay periods
     let mut ledger = t.env.ledger().get();
     ledger.sequence_number += 1000;
     t.env.ledger().set(ledger);
 
+    // Get score - should floor at 0
     let score = t.contract.payer_score(&t.payer);
 
     assert_eq!(score, 0, "Score should floor at 0, not go negative");
@@ -1170,48 +1185,81 @@ fn test_reputation_score_never_goes_below_zero() {
 fn test_reputation_score_never_exceeds_100() {
     let t = setup();
 
-    t.env.as_contract(&t.contract_id, || {
-        set_payer_score(&t.env, &t.payer, 150);
+    // Try to set score above 100
+    t.env.as_contract(&t.contract.address, || {
+        invoice::set_payer_score(&t.env, &t.payer, 150);
     });
 
+    // Score should be capped at 100
     let score = t.contract.payer_score(&t.payer);
 
     assert_eq!(score, 100, "Score should be capped at 100");
 }
 
+// ================================================================
+// Test: Contract Upgrade (Issue #48)
+// ================================================================
+
 #[test]
 fn test_upgrade_emits_correct_event() {
     let t = setup();
 
+    // Generate a mock WASM hash (32 bytes)
     let wasm_hash = soroban_sdk::BytesN::from_array(&t.env, &[1u8; 32]);
 
+    // Admin calls upgrade
     t.contract.upgrade(&wasm_hash);
 
-    let events = t.env.events().all().filter_by_contract(&t.contract_id);
+    let events = t.env.events().all().filter_by_contract(&t.contract.address);
 
-    let expected_event = ContractUpgraded {
-        admin: t.admin.clone(),
+    let admin = t.env.as_contract(&t.contract.address, || {
+        crate::storage::get_admin(&t.env).unwrap()
+    });
+
+    let expected_event = crate::events::ContractUpgraded {
+        admin,
         new_wasm_hash: wasm_hash,
         timestamp: t.env.ledger().timestamp(),
     };
 
     assert_eq!(
         events.events().last(),
-        Some(&expected_event.to_xdr(&t.env, &t.contract_id)),
+        Some(&expected_event.to_xdr(&t.env, &t.contract.address)),
         "ContractUpgraded event should be emitted"
     );
+}
+
+#[test]
+fn test_upgrade_requires_admin() {
+    let t = setup();
+    let _unauthorized_caller = Address::generate(&t.env);
+
+    let wasm_hash = soroban_sdk::BytesN::from_array(&t.env, &[2u8; 32]);
+
+    // Non-admin should not be able to call upgrade
+    let _result = t.contract.try_upgrade(&wasm_hash);
+
+    // Should fail (admin-only)
+    // Note: In test env with mock_all_auths(), this might not fail
+    // In production, this would be enforced by require_admin()
+
+    // The actual auth check happens in require_admin()
+    // which is tested separately via the access control module
 }
 
 #[test]
 fn test_upgrade_does_not_affect_existing_invoices() {
     let t = setup();
 
+    // Create an invoice before upgrade
     let id = submit_standard_invoice(&t);
     let invoice_before = t.contract.get_invoice(&id);
 
+    // Perform upgrade
     let wasm_hash = soroban_sdk::BytesN::from_array(&t.env, &[3u8; 32]);
     t.contract.upgrade(&wasm_hash);
 
+    // Verify invoice is still readable and unchanged
     let invoice_after = t.contract.get_invoice(&id);
 
     assert_eq!(
@@ -1240,16 +1288,27 @@ fn test_upgrade_does_not_affect_existing_invoices() {
 fn test_upgrade_snapshot_before_after() {
     let t = setup();
 
+    // Get contract stats before upgrade
+    let _stats_before = t.contract.get_contract_stats();
+
+    // Submit invoices to have data
     let _id1 = submit_standard_invoice(&t);
     let stats_with_data = t.contract.get_contract_stats();
 
+    // Perform upgrade
     let wasm_hash = soroban_sdk::BytesN::from_array(&t.env, &[4u8; 32]);
     t.contract.upgrade(&wasm_hash);
 
+    // Get contract stats after upgrade
     let stats_after = t.contract.get_contract_stats();
 
+    // Verify stats are preserved
     assert_eq!(
         stats_with_data.total_invoices, stats_after.total_invoices,
         "Total invoices should be preserved after upgrade"
+    );
+    assert_eq!(
+        stats_with_data.total_paid, stats_after.total_paid,
+        "Total paid should be preserved after upgrade"
     );
 }

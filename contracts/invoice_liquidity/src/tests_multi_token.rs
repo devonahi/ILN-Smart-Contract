@@ -61,6 +61,8 @@ fn setup() -> MultiTokenTestEnv {
 
     let contract_id = env.register(InvoiceLiquidityContract, ());
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
+    contract.initialize(&admin, &usdc.address, &xlm.address);
+    contract.add_token(&eurc.address, &6_u32); // EURC has 6 decimals
     contract.initialize(&admin, &usdc.address, &eurc.address, &xlm.address);
 
     let mut ledger_info = env.ledger().get();
@@ -124,7 +126,7 @@ fn assert_full_lifecycle_for_token(
         "{token_name} should pay the freelancer in the same token path",
     );
 
-    env.contract.mark_paid(&invoice_id, &INVOICE_AMOUNT);
+    env.contract.mark_paid(&invoice_id, &amount);
 
     assert_eq!(
         token.client.balance(&env.lp) - lp_before,
@@ -186,6 +188,8 @@ fn test_admin_removing_token_mid_flight_does_not_break_existing_invoice_settleme
 
     env.contract.remove_token(&env.eurc.address);
 
+    env.contract.fund_invoice(&env.lp, &invoice_id, &amount);
+    env.contract.mark_paid(&invoice_id, &amount);
     env.contract.fund_invoice(&env.lp, &invoice_id, &amount, &false);
     env.contract.mark_paid(&invoice_id, &INVOICE_AMOUNT);
 
@@ -211,7 +215,7 @@ fn test_same_lp_can_settle_invoices_independently_across_different_tokens() {
     env.contract
         .fund_invoice(&env.lp, &eurc_invoice, &eurc_amount, &false);
 
-    env.contract.mark_paid(&usdc_invoice, &INVOICE_AMOUNT);
+    env.contract.mark_paid(&usdc_invoice, &usdc_amount);
 
     assert_eq!(
         env.contract.get_invoice(&usdc_invoice).status,
@@ -230,7 +234,7 @@ fn test_same_lp_can_settle_invoices_independently_across_different_tokens() {
         eurc_lp_before - eurc_amount
     );
 
-    env.contract.mark_paid(&eurc_invoice, &INVOICE_AMOUNT);
+    env.contract.mark_paid(&eurc_invoice, &eurc_amount);
 
     assert_eq!(
         env.contract.get_invoice(&eurc_invoice).status,

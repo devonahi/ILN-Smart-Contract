@@ -162,6 +162,7 @@ impl InvoiceLiquidityContract {
         };
         crate::storage::set_config(&env, &initial_config);
 
+        // approve first token (USDC: 6 decimals)
         // approve initial tokens
         env.storage().persistent().set(
             &crate::storage::DataKey::ApprovedToken(usdc_token.clone()),
@@ -172,11 +173,19 @@ impl InvoiceLiquidityContract {
             &crate::storage::DataKey::ApprovedToken(eurc_token.clone()),
             &true,
         );
+        env.storage().persistent().set(
+            &crate::storage::DataKey::TokenDecimals(token.clone()),
+            &6_u32,
+        );
 
-        // approve native XLM SAC
+        // approve native XLM SAC (7 decimals)
         env.storage().persistent().set(
             &crate::storage::DataKey::ApprovedToken(xlm_token.clone()),
             &true,
+        );
+        env.storage().persistent().set(
+            &crate::storage::DataKey::TokenDecimals(xlm_token.clone()),
+            &7_u32,
         );
 
         let mut list: Vec<Address> = Vec::new(&env);
@@ -296,6 +305,7 @@ impl InvoiceLiquidityContract {
     }
 
     /// Access: Admin only
+    pub fn add_token(env: Env, token: Address, decimals: u32) -> Result<(), ContractError> {
     ///
     /// Reject tokens that implement fee-on-transfer behavior by ensuring a small
     /// token transfer to the contract results in the same amount being received.
@@ -331,6 +341,13 @@ impl InvoiceLiquidityContract {
             &true,
         );
 
+        // Store the decimal precision for this token so amount comparisons and
+        // minimum-amount checks can be scaled correctly (Issue #23).
+        env.storage().persistent().set(
+            &crate::storage::DataKey::TokenDecimals(token.clone()),
+            &decimals,
+        );
+
         let mut list: Vec<Address> = env
             .storage()
             .persistent()
@@ -343,7 +360,7 @@ impl InvoiceLiquidityContract {
                 .set(&crate::storage::DataKey::TokenList, &list);
         }
 
-        env.events().publish_event(&TokenAdded { token });
+        env.events().publish_event(&TokenAdded { token, decimals });
         Ok(())
     }
 
@@ -373,6 +390,20 @@ impl InvoiceLiquidityContract {
 
         env.events().publish_event(&TokenRemoved { token });
         Ok(())
+    }
+
+    /// Return the registered decimal precision for a token.
+    ///
+    /// Returns `None` when the token has never been registered via
+    /// `add_token` or `initialize`. For the two bootstrap tokens (USDC at 6
+    /// decimals and XLM at 7 decimals) these are set automatically during
+    /// `initialize`.
+    ///
+    /// Access: Anyone
+    pub fn get_token_decimals(env: Env, token: Address) -> Option<u32> {
+        env.storage()
+            .persistent()
+            .get(&crate::storage::DataKey::TokenDecimals(token))
     }
 
     // ------------------------------------------------------------
@@ -539,6 +570,11 @@ impl InvoiceLiquidityContract {
             return Err(ContractError::Unauthorized);
         }
 
+        // Re-validate amount using token-aware decimal precision now that we
+        // know the token is on the allowlist (and therefore has decimals stored).
+        validate_invoice_terms_with_token(&env, amount, due_date, discount_rate, &token)?;
+
+        let id = next_invoice_id(&env);
         let id = next_invoice_id(&env)?;
 
         // Capture the freelancer's reputation score at submission time
@@ -753,6 +789,16 @@ impl InvoiceLiquidityContract {
                 return Err(ContractError::Unauthorized);
             }
 
+            // Re-validate with token-aware decimal precision.
+            validate_invoice_terms_with_token(
+                &env,
+                params.amount,
+                params.due_date,
+                params.discount_rate,
+                &params.token,
+            )?;
+
+            let id = next_invoice_id(&env);
             let id = next_invoice_id(&env)?;
 
             // Capture the freelancer's reputation score at submission time
@@ -2109,6 +2155,17 @@ fn discount_rate_as_i128(rate: u32) -> i128 {
     rate as i128
 }
 
+/// Compute 10^exp as i128 without std.  Used for token-decimal scaling.
+/// Saturates at i128::MAX to prevent overflow for extreme inputs (max useful
+/// value is 10^18 which fits comfortably inside i128).
+fn ten_pow(exp: u32) -> i128 {
+    let mut result: i128 = 1;
+    for _ in 0..exp {
+        result = result.saturating_mul(10);
+    }
+    result
+}
+
 // ----------------------------------------------------------------
 // XLM PRECISION HANDLING
 // ----------------------------------------------------------------
@@ -2160,7 +2217,46 @@ fn validate_invoice_terms(
     due_date: u64,
     discount_rate: u32,
 ) -> Result<(), ContractError> {
-    if amount < 1_000_000 {
+    // Backward-compatible fallback (no token context).  Uses the minimum for a
+    // 6-decimal token (USDC).  New call-sites should prefer
+    // `validate_invoice_terms_with_token` so the check is token-aware.
+    validate_invoice_terms_for_min(env, amount, 1_000_000, due_date, discount_rate)
+}
+
+/// Validate invoice terms using the decimal precision stored for `token`.
+///
+/// The minimum accepted amount is `1` whole unit in the token's own precision:
+/// - 6-decimal token (USDC): minimum = 1_000_000  (= 1 USDC)
+/// - 7-decimal token (XLM):  minimum = 10_000_000 (= 1 XLM)
+///
+/// Falls back to the 6-decimal floor when no decimals are registered for the
+/// token (i.e. a token added via legacy code paths before Issue #23).
+fn validate_invoice_terms_with_token(
+    env: &Env,
+    amount: i128,
+    due_date: u64,
+    discount_rate: u32,
+    token: &Address,
+) -> Result<(), ContractError> {
+    let decimals: u32 = env
+        .storage()
+        .persistent()
+        .get(&crate::storage::DataKey::TokenDecimals(token.clone()))
+        .unwrap_or(6);
+
+    let min_amount: i128 = ten_pow(decimals);
+    validate_invoice_terms_for_min(env, amount, min_amount, due_date, discount_rate)
+}
+
+/// Core validation logic shared by the two public entry points above.
+fn validate_invoice_terms_for_min(
+    env: &Env,
+    amount: i128,
+    min_amount: i128,
+    due_date: u64,
+    discount_rate: u32,
+) -> Result<(), ContractError> {
+    if amount < min_amount {
         return Err(ContractError::InvalidAmount);
     }
 
@@ -2284,6 +2380,7 @@ mod tests_state_machine;
 mod tests_storage;
 mod tests_storage_extra;
 #[cfg(test)]
+mod tests_token_decimals;
 mod tests_benchmarks;
 #[cfg(test)]
 mod tests_top_payers;

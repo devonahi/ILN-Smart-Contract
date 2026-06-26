@@ -8,6 +8,8 @@ use crate::invoice::InvoiceStatus;
 pub struct TokenAdded {
     #[topic]
     pub token: Address,
+    /// Number of decimal places for this token (e.g. 6 for USDC, 7 for XLM).
+    pub decimals: u32,
 }
 
 /// Emitted when governance removes a token from the funding allowlist (Issue #19).

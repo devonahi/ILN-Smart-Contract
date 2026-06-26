@@ -70,7 +70,10 @@ pub enum GovernanceError {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProposalAction {
     UpdateFeeRate(u32),
-    AddToken(Address),
+    /// Add a token to the allowlist. The tuple carries the token address and
+    /// its decimal precision (e.g. 6 for USDC, 7 for XLM) — required since
+    /// Issue #23 introduced the token decimals registry.
+    AddToken(Address, u32),
     RemoveToken(Address),
     UpdateMaxDiscountRate(u32),
 }
@@ -660,6 +663,17 @@ impl GovContract {
             if current_ledger < proposal.eta_ledger {
                 return Err(GovernanceError::TimelockNotExpired);
             }
+            ProposalAction::AddToken(token, decimals) => {
+                let args: Vec<soroban_sdk::Val> = vec![&env, token.into_val(&env), decimals.into_val(&env)];
+                env.invoke_contract::<()>(&iln_contract, &Symbol::new(&env, "add_token"), args);
+            }
+            ProposalAction::RemoveToken(token) => {
+                let args: Vec<soroban_sdk::Val> = vec![&env, token.into_val(&env)];
+                env.invoke_contract::<()>(&iln_contract, &Symbol::new(&env, "remove_token"), args);
+            }
+            ProposalAction::UpdateMaxDiscountRate(rate) => {
+                let args: Vec<soroban_sdk::Val> = vec![&env, rate.into_val(&env)];
+                env.invoke_contract::<()>(&iln_contract, &Symbol::new(&env, "update_max_discount"), args);
 
             let iln_contract: Address = env
                 .storage()

@@ -146,13 +146,13 @@ fn test_proposal_action_add_token_stored_correctly() {
 
     let id = t.contract.create_proposal(
         &t.proposer,
-        &ProposalAction::AddToken(token_addr.clone()),
+        &ProposalAction::AddToken(token_addr.clone(), 6_u32),
         &dummy_hash(&t.env),
         &0_i128,
     );
 
     let p = t.contract.get_proposal(&id);
-    assert_eq!(p.action_type, ProposalAction::AddToken(token_addr));
+    assert_eq!(p.action_type, ProposalAction::AddToken(token_addr, 6_u32));
     assert_eq!(p.proposed_value, 0);
 }
 

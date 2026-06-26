@@ -25,6 +25,8 @@ pub enum DataKey {
     InvoiceFunders(u64),
     ApprovedToken(Address),
     TokenList,
+    /// Decimal precision for each allowlisted token (e.g. 6 for USDC, 7 for XLM).
+    TokenDecimals(Address),
     /// Detailed reputation profile per address (Issue #26).
     Reputation(Address),
     Appeal(u64),

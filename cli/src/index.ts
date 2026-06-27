@@ -9,6 +9,7 @@ import { Command } from "commander";
 import { makeConfigCommand } from "./commands/config.js";
 import { makeExportCommand } from "./commands/export.js";
 import { makeWalletCommand } from "./commands/wallet.js";
+import { makeSubmitCommand } from "./commands/submit.js";
 
 const program = new Command();
 
@@ -21,5 +22,6 @@ program
 program.addCommand(makeConfigCommand());
 program.addCommand(makeExportCommand());
 program.addCommand(makeWalletCommand());
+program.addCommand(makeSubmitCommand());
 
 program.parse(process.argv);

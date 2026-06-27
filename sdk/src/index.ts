@@ -63,3 +63,7 @@ export type {
   CreateProposalResult,
 } from "./types/governance.js";
 export { ILNError } from "./errors.js";
+export { disputeInvoice, sha256Hex } from "./methods/disputeInvoice.js";
+export type { DisputeInvoiceParams, DisputeInvoiceResult } from "./methods/disputeInvoice.js";
+export { TokenRegistry, tokenRegistry } from "./utils/tokenRegistry.js";
+export type { TokenInfo, NetworkName } from "./utils/tokenRegistry.js";

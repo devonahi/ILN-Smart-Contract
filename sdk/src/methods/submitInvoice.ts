@@ -20,6 +20,17 @@ import { ILNError } from "../errors.js";
  * @param signTransaction A function to sign the transaction (e.g. Freighter or Keypair)
  * @param networkPassphrase The network passphrase
  * @returns Object containing invoiceId and txHash
+ * @throws {ILNError.InvalidAmount} If amount is <= 0
+ * @throws {ILNError.InvalidDiscountRate} If discount rate is not between 1 and 5000 bps
+ * @throws {ILNError.DueDateTooSoon} If due date is < 24h
+ * @throws {ILNError.DueDateTooFar} If due date is > 365 days
+ * @throws {ILNError} If payer address is invalid or transaction fails
+ * @example
+ * ```ts
+ * const { invoiceId, txHash } = await submitInvoice(server, contractAddress, {
+ *   payer: "G...", amount: 1000n, dueDate: Date.now() / 1000 + 86400 * 30, discountRate: 300, token: "C..."
+ * }, sourceAccount, signTx, Networks.TESTNET);
+ * ```
  */
 export async function submitInvoice(
   server: SorobanRpc.Server,

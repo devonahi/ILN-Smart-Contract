@@ -19,6 +19,14 @@ import { getInvoice } from "./queries.js";
  * @param signTransaction A function to sign the transaction (e.g. Freighter or Keypair)
  * @param networkPassphrase The network passphrase
  * @returns Object containing txHash
+ * @throws {ILNError.InvoiceNotCancellable} When the invoice is not in a Pending state
+ * @throws {ILNError.Unauthorized} When caller is not the invoice submitter
+ * @throws {ILNError} When simulation or execution fails
+ * @example
+ * ```ts
+ * const { txHash } = await cancelInvoice(server, contractAddress, 42n, sourceAccount, signTx, Networks.TESTNET);
+ * console.log(txHash);
+ * ```
  */
 export async function cancelInvoice(
   server: SorobanRpc.Server,

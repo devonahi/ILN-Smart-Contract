@@ -21,6 +21,13 @@ import type { MarkPaidResult } from "../types/params.js";
  * @param signTransaction A function to sign the transaction
  * @param networkPassphrase The network passphrase
  * @returns Object with txHash, remainingBalance and fullySettled flag
+ * @throws {ILNError.InsufficientAmount} If payment amount is <= 0 or exceeds outstanding balance
+ * @throws {ILNError} When simulation or execution fails
+ * @example
+ * ```ts
+ * const result = await markPaid(server, contractAddress, 42n, 100n, sourceAccount, signTx, Networks.TESTNET);
+ * console.log(`Remaining balance: ${result.remainingBalance}`);
+ * ```
  */
 export async function markPaid(
   server: SorobanRpc.Server,

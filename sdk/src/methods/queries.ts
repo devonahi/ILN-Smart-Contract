@@ -19,6 +19,13 @@ import { computeEffectiveYieldBps } from "./fundInvoice.js";
  * @param sourceAccount Account used for simulation (does not consume sequence or fees)
  * @param networkPassphrase The network passphrase
  * @returns The invoice data including computed yield
+ * @throws {ILNError.InvoiceNotFound} If the invoice does not exist
+ * @throws {ILNError} On other simulation errors
+ * @example
+ * ```ts
+ * const invoice = await getInvoice(server, contractAddress, 42n, sourceAccount, Networks.TESTNET);
+ * console.log(`Invoice status: ${invoice.status}`);
+ * ```
  */
 export async function getInvoice(
   server: SorobanRpc.Server,
@@ -86,6 +93,11 @@ export async function getInvoice(
  * @param page The page number (0-indexed)
  * @param pageSize The number of items per page
  * @returns Array of invoices
+ * @throws {ILNError} On simulation errors
+ * @example
+ * ```ts
+ * const invoices = await listInvoicesBySubmitter(server, contractAddress, "G...", sourceAccount, Networks.TESTNET, 0, 10);
+ * ```
  */
 export async function listInvoicesBySubmitter(
   server: SorobanRpc.Server,
@@ -155,6 +167,11 @@ export async function listInvoicesBySubmitter(
  * @param page The page number (0-indexed)
  * @param pageSize The number of items per page
  * @returns Array of invoices
+ * @throws {ILNError} On simulation errors
+ * @example
+ * ```ts
+ * const invoices = await listInvoicesByLP(server, contractAddress, "G...", sourceAccount, Networks.TESTNET, 0, 10);
+ * ```
  */
 export async function listInvoicesByLP(
   server: SorobanRpc.Server,

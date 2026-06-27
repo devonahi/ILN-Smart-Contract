@@ -201,6 +201,14 @@ impl InvoiceLiquidityContract {
     }
 
     // ------------------------------------------------------------
+    // Version view
+    // ------------------------------------------------------------
+    /// Access: Anyone
+    pub fn get_version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, crate::constants::CONTRACT_VERSION)
+    }
+
+    // ------------------------------------------------------------
     /// Access: Admin only
     pub fn set_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
         require_admin(&env)?;

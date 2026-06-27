@@ -1312,3 +1312,10 @@ fn test_upgrade_snapshot_before_after() {
         "Total paid should be preserved after upgrade"
     );
 }
+
+#[test]
+fn test_get_version() {
+    let t = setup();
+    let version = t.contract.get_version();
+    assert_eq!(version, soroban_sdk::String::from_str(&t.env, "1.0.0"));
+}

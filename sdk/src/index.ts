@@ -26,3 +26,8 @@ export type {
   EventFilter,
   Unsubscribe,
 } from "./events/types.js";
+
+export { getInvoice, listInvoicesBySubmitter, listInvoicesByLP } from "./methods/queries.js";
+export { submitInvoice } from "./methods/submitInvoice.js";
+export { markPaid } from "./methods/markPaid.js";
+export { ILNError } from "./errors.js";

@@ -11,6 +11,8 @@ import { makeExportCommand } from "./commands/export.js";
 import { makeWalletCommand } from "./commands/wallet.js";
 import { makeSubmitCommand } from "./commands/submit.js";
 import { makeCancelCommand } from "./commands/cancel.js";
+import { makeMarketplaceCommand } from "./commands/marketplace.js";
+import { makeFundCommand } from "./commands/fund.js";
 
 const program = new Command();
 
@@ -25,5 +27,7 @@ program.addCommand(makeExportCommand());
 program.addCommand(makeWalletCommand());
 program.addCommand(makeSubmitCommand());
 program.addCommand(makeCancelCommand());
+program.addCommand(makeMarketplaceCommand());
+program.addCommand(makeFundCommand());
 
 program.parse(process.argv);

@@ -57,7 +57,7 @@ fn bootstrap() -> (Env, InvoiceLiquidityContractClient<'static>, TokenInfo, Toke
     usdc.admin.mint(&minter, &10_000_000_000_000);
     xlm.admin.mint(&minter, &10_000_000_000_000);
 
-    let contract_id = env.register(InvoiceLiquidityContract, ());
+    let contract_id = env.register_contract(None, InvoiceLiquidityContract);
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
     // initialize() seeds USDC at 6 decimals and XLM at 7 decimals
@@ -249,13 +249,7 @@ fn test_6dec_minimum_fails_for_7_decimal_token() {
     let due_date = env.ledger().timestamp() + DUE_DATE_OFFSET;
 
     // 1_000_000 is ≥ the old hard-coded USDC floor but < 1 XLM (10_000_000)
-    let result = contract.try_submit_invoice(
-        &freelancer,
-        &payer,
-        &1_000_000,
-        &due_date,
-        &DISCOUNT_RATE,
-        &xlm.address,
+    let result = contract.try_submit_invoice(try_        &ReferralCode::None,
     );
     assert_eq!(
         result,
@@ -397,11 +391,9 @@ fn test_6_and_7_decimal_tokens_maintain_independent_precision() {
     // 50 XLM   = 500_000_000 (7 dec)
     let xlm_amount: i128 = 500_000_000;
 
-    let usdc_id = contract.submit_invoice(
-        &freelancer, &payer, &usdc_amount, &due_date, &DISCOUNT_RATE, &usdc.address,
+    let usdc_id = contract.submit_invoice(        &ReferralCode::None,
     );
-    let xlm_id = contract.submit_invoice(
-        &freelancer, &payer, &xlm_amount, &due_date, &DISCOUNT_RATE, &xlm.address,
+    let xlm_id = contract.submit_invoice(        &ReferralCode::None,
     );
 
     contract.fund_invoice(&funder, &usdc_id, &usdc_amount);
@@ -442,7 +434,7 @@ fn test_add_token_event_contains_decimals() {
     let new_token = register_token(&env);
     contract.add_token(&new_token.address, &8_u32);
 
-    let events = env.events().all().filter_by_contract(&contract.address);
+    let events = env.events().all();
     let last_event = events.events().last();
 
     let expected = TokenAdded {

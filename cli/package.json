@@ -14,6 +14,7 @@
     "lint": "eslint src"
   },
   "dependencies": {
+    "@stellar/stellar-sdk": "^16.0.1",
     "commander": "^12.0.0"
   },
   "devDependencies": {
@@ -27,6 +28,9 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "testMatch": ["**/tests/**/*.test.ts", "**/src/**/*.test.ts"]
+    "testMatch": [
+      "**/tests/**/*.test.ts",
+      "**/src/**/*.test.ts"
+    ]
   }
 }

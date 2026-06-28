@@ -28,13 +28,7 @@ fn submit_emits_reputation_updated_increments_submitted() {
 
     let events_before = t.env.events().all().events().len();
 
-    t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     // At least one new event was emitted
@@ -55,23 +49,11 @@ fn submit_second_invoice_increments_submitted_count_to_two() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     let due_date2 = due_date + 1;
-    t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date2,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     let profile = t.contract.get_reputation(&t.freelancer);
@@ -89,13 +71,7 @@ fn mark_paid_emits_reputation_updated_for_payer_score_and_paid_count() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
@@ -120,13 +96,7 @@ fn mark_paid_emits_reputation_updated_for_freelancer_paid_count() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
@@ -148,13 +118,7 @@ fn claim_default_emits_reputation_updated_score_penalty_and_defaulted_count() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);
@@ -187,13 +151,7 @@ fn claim_default_score_floored_at_zero_when_score_below_penalty() {
 
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     t.contract.fund_invoice(&t.funder, &invoice_id, &INVOICE_AMOUNT, &false);

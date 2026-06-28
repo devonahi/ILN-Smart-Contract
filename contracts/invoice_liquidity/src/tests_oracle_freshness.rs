@@ -68,7 +68,7 @@ impl MockTimestampedOracle {
 /// Register a MockTimestampedOracle, pre-seed its timestamp, wire it into the
 /// contract config, and return the oracle's contract address.
 fn register_oracle_with_timestamp(t: &crate::test::TestEnv, oracle_ts: u32) -> Address {
-    let oracle_id = t.env.register(MockTimestampedOracle, ());
+    let oracle_id = t.env.register_contract(None, MockTimestampedOracle);
     let oracle_client = MockTimestampedOracleClient::new(&t.env, &oracle_id);
     oracle_client.set_timestamp(&oracle_ts);
     t.contract.set_price_oracle(&oracle_id).unwrap();
@@ -85,7 +85,7 @@ fn make_invoice(t: &crate::test::TestEnv) -> u64 {
             &(now + DUE_DATE_OFFSET),
             &DISCOUNT_RATE,
             &t.token.address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         )
         .unwrap()
 }

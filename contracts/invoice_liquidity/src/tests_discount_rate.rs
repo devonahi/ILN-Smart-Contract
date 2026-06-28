@@ -12,13 +12,7 @@ fn test_zero_discount_rejected() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let result = t.contract.try_submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &0,
-        &t.token.address,
+    let result = t.contract.try_submit_invoice(try_        &ReferralCode::None,
     );
 
     assert_eq!(result, Err(Ok(ContractError::InvalidDiscountRate)));
@@ -29,13 +23,7 @@ fn test_max_discount_accepted() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &MAX_DISCOUNT_RATE,
-        &t.token.address,
+    let id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     let invoice = t.contract.get_invoice(&id);
@@ -48,13 +36,7 @@ fn test_above_max_rejected() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let result = t.contract.try_submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &(MAX_DISCOUNT_RATE + 1),
-        &t.token.address,
+    let result = t.contract.try_submit_invoice(try_        &ReferralCode::None,
     );
 
     assert_eq!(result, Err(Ok(ContractError::InvalidDiscountRate)));
@@ -65,13 +47,7 @@ fn test_discount_rate_one_accepted() {
     let t = setup();
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
 
-    let id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &1,
-        &t.token.address,
+    let id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     let invoice = t.contract.get_invoice(&id);
@@ -84,13 +60,7 @@ fn test_large_invoice_with_max_discount() {
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
     let large_amount: i128 = 100_000_000_000_000;
 
-    let id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &large_amount,
-        &due_date,
-        &MAX_DISCOUNT_RATE,
-        &t.token.address,
+    let id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     let invoice = t.contract.get_invoice(&id);
@@ -105,13 +75,7 @@ fn test_discount_validation_happens_before_storage_write() {
 
     let initial_invoice_count = t.contract.get_invoice_count();
 
-    let result = t.contract.try_submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &(MAX_DISCOUNT_RATE + 1),
-        &t.token.address,
+    let result = t.contract.try_submit_invoice(try_        &ReferralCode::None,
     );
 
     assert_eq!(result, Err(Ok(ContractError::InvalidDiscountRate)));

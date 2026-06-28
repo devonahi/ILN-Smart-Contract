@@ -9,7 +9,7 @@
 
 #![no_std]
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype,
+    contract, contracterror, contractimpl, contracttype,
     token::Client as TokenClient, vec, Address, BytesN, Env, IntoVal, Symbol, Vec,
 };
 
@@ -32,7 +32,7 @@ const MAX_DELEGATION_DEPTH: u32 = 10;
 // ================================================================
 
 #[contracterror]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum GovernanceError {
     AlreadyInitialized = 1,
     ProposalNotFound = 2,
@@ -117,39 +117,33 @@ pub struct GovernanceProposal {
 // Events
 // ================================================================
 
-#[contractevent(topics = ["vote_cast"])]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoteCast {
-    #[topic]
     pub proposal_id: u64,
-    #[topic]
     pub voter: Address,
     pub support: bool,
     pub weight: i128,
 }
 
 /// Issue #64
-#[contractevent(topics = ["votes_delegated"])]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct VotesDelegated {
-    #[topic]
     pub delegator: Address,
-    #[topic]
     pub delegate: Address,
 }
 
 /// Issue #64
-#[contractevent(topics = ["votes_undelegated"])]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct VotesUndelegated {
-    #[topic]
     pub delegator: Address,
 }
 
-#[contractevent(topics = ["proposal_executed"])]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalExecuted {
-    #[topic]
     pub proposal_id: u64,
     pub action_type: ProposalAction,
     pub proposed_value: i128,
@@ -158,23 +152,19 @@ pub struct ProposalExecuted {
 }
 
 /// Issue #68: emitted when the admin vetoes a proposal.
-#[contractevent(topics = ["proposal_vetoed"])]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalVetoed {
-    #[topic]
     pub proposal_id: u64,
-    #[topic]
     pub admin: Address,
     pub reason_hash: BytesN<32>,
 }
 
 /// Emitted when a new governance proposal is created.
-#[contractevent(topics = ["proposal_created"])]
+#[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProposalCreated {
-    #[topic]
     pub proposal_id: u64,
-    #[topic]
     pub proposer: Address,
     pub action_type: ProposalAction,
     pub proposed_value: i128,
@@ -342,13 +332,16 @@ impl GovContract {
             .instance()
             .set(&StorageKey::ProposalCount, &id);
 
-        env.events().publish_event(&ProposalCreated {
-            proposal_id: id,
-            proposer,
-            action_type,
-            proposed_value,
-            voting_end,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "proposal_created"), id, proposer.clone()),
+            ProposalCreated {
+                proposal_id: id,
+                proposer,
+                action_type,
+                proposed_value,
+                voting_end,
+            },
+        );
 
         Ok(id)
     }
@@ -437,10 +430,13 @@ impl GovContract {
         let delegator_balance = Self::get_own_balance_for_delegation(&env, &delegator);
         Self::adjust_delegated_to_me(&env, &terminal, delegator_balance);
 
-        env.events().publish_event(&VotesDelegated {
-            delegator,
-            delegate,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "votes_delegated"), delegator.clone(), delegate.clone()),
+            VotesDelegated {
+                delegator,
+                delegate,
+            },
+        );
 
         Ok(())
     }
@@ -463,7 +459,10 @@ impl GovContract {
                 .remove(&StorageKey::Delegation(delegator.clone()));
         }
 
-        env.events().publish_event(&VotesUndelegated { delegator });
+        env.events().publish(
+            (Symbol::new(&env, "votes_undelegated"), delegator.clone()),
+            VotesUndelegated { delegator },
+        );
 
         Ok(())
     }
@@ -550,12 +549,15 @@ impl GovContract {
             .persistent()
             .set(&StorageKey::Proposal(proposal_id), &proposal);
 
-        env.events().publish_event(&VoteCast {
-            proposal_id,
-            voter,
-            support,
-            weight,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "vote_cast"), proposal_id, voter.clone()),
+            VoteCast {
+                proposal_id,
+                voter,
+                support,
+                weight,
+            },
+        );
 
         Ok(())
     }
@@ -658,28 +660,17 @@ impl GovContract {
             return Ok(());
         }
 
-        if proposal.status == ProposalStatus::Passed {
-            let current_ledger = env.ledger().sequence();
-            if current_ledger < proposal.eta_ledger {
-                return Err(GovernanceError::TimelockNotExpired);
-            }
-            ProposalAction::AddToken(token, decimals) => {
-                let args: Vec<soroban_sdk::Val> = vec![&env, token.into_val(&env), decimals.into_val(&env)];
-                env.invoke_contract::<()>(&iln_contract, &Symbol::new(&env, "add_token"), args);
-            }
-            ProposalAction::RemoveToken(token) => {
-                let args: Vec<soroban_sdk::Val> = vec![&env, token.into_val(&env)];
-                env.invoke_contract::<()>(&iln_contract, &Symbol::new(&env, "remove_token"), args);
-            }
-            ProposalAction::UpdateMaxDiscountRate(rate) => {
-                let args: Vec<soroban_sdk::Val> = vec![&env, rate.into_val(&env)];
-                env.invoke_contract::<()>(&iln_contract, &Symbol::new(&env, "update_max_discount"), args);
+            if proposal.status == ProposalStatus::Passed {
+                let current_ledger = env.ledger().sequence();
+                if current_ledger < proposal.eta_ledger {
+                    return Err(GovernanceError::TimelockNotExpired);
+                }
 
-            let iln_contract: Address = env
-                .storage()
-                .instance()
-                .get(&StorageKey::IlnContract)
-                .unwrap();
+                let iln_contract: Address = env
+                    .storage()
+                    .instance()
+                    .get(&StorageKey::IlnContract)
+                    .unwrap();
 
             match proposal.action_type.clone() {
                 ProposalAction::UpdateFeeRate(rate) => {
@@ -690,7 +681,7 @@ impl GovContract {
                         args,
                     );
                 }
-                ProposalAction::AddToken(token) => {
+                ProposalAction::AddToken(token, _decimals) => {
                     let args: Vec<soroban_sdk::Val> = vec![&env, token.into_val(&env)];
                     env.invoke_contract::<()>(&iln_contract, &Symbol::new(&env, "add_token"), args);
                 }
@@ -717,13 +708,16 @@ impl GovContract {
                 .persistent()
                 .set(&StorageKey::Proposal(proposal_id), &proposal);
 
-            env.events().publish_event(&ProposalExecuted {
-                proposal_id,
-                action_type: proposal.action_type,
-                proposed_value: proposal.proposed_value,
-                votes_for: proposal.votes_for,
-                votes_against: proposal.votes_against,
-            });
+            env.events().publish(
+                (Symbol::new(&env, "proposal_executed"), proposal_id),
+                ProposalExecuted {
+                    proposal_id,
+                    action_type: proposal.action_type,
+                    proposed_value: proposal.proposed_value,
+                    votes_for: proposal.votes_for,
+                    votes_against: proposal.votes_against,
+                },
+            );
 
             return Ok(());
         }
@@ -783,11 +777,14 @@ impl GovContract {
             .persistent()
             .set(&StorageKey::Proposal(proposal_id), &proposal);
 
-        env.events().publish_event(&ProposalVetoed {
-            proposal_id,
-            admin,
-            reason_hash,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "proposal_vetoed"), proposal_id, admin.clone()),
+            ProposalVetoed {
+                proposal_id,
+                admin,
+                reason_hash,
+            },
+        );
 
         Ok(())
     }

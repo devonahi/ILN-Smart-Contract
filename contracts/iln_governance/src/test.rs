@@ -58,9 +58,9 @@ fn setup() -> GovTestEnv {
     gov_token_admin.mint(&voter_b, &2_000);
     gov_token_admin.mint(&proposer, &1_000);
 
-    let iln_contract = env.register(MockIln, ());
+    let iln_contract = env.register_contract(None, MockIln);
 
-    let contract_id = env.register(GovContract, ());
+    let contract_id = env.register_contract(None, GovContract);
     let contract = GovContractClient::new(&env, &contract_id);
 
     contract.initialize(&iln_contract, &token_addr, &admin);
@@ -372,7 +372,7 @@ fn test_cast_vote_emits_vote_cast_event() {
     let t = setup();
     let id = create_fee_proposal(&t);
     t.contract.cast_vote(&t.voter_a, &id, &true);
-    let events = t.env.events().all().filter_by_contract(&t.contract.address);
+    let events = t.env.events().all();
     assert!(
         !events.events().is_empty(),
         "VoteCast event should be emitted"
@@ -615,7 +615,7 @@ fn test_redelegation_moves_weight_to_new_delegate() {
 fn test_delegate_votes_emits_votes_delegated_event() {
     let t = setup();
     t.contract.delegate_votes(&t.voter_a, &t.voter_b);
-    let events = t.env.events().all().filter_by_contract(&t.contract.address);
+    let events = t.env.events().all();
     assert!(
         !events.events().is_empty(),
         "VotesDelegated event should be emitted"
@@ -627,7 +627,7 @@ fn test_undelegate_votes_emits_votes_undelegated_event() {
     let t = setup();
     t.contract.delegate_votes(&t.voter_a, &t.voter_b);
     t.contract.undelegate_votes(&t.voter_a);
-    let events = t.env.events().all().filter_by_contract(&t.contract.address);
+    let events = t.env.events().all();
     assert!(
         !events.events().is_empty(),
         "VotesUndelegated event should be emitted"
@@ -808,11 +808,11 @@ fn test_non_admin_veto_fails() {
     // Do NOT call mock_all_auths — require_auth will reject any unauthorized caller.
     let token_id = env.register_stellar_asset_contract_v2(Address::generate(&env));
     let token_addr = token_id.address();
-    let iln_id = env.register(MockIln, ());
+    let iln_id = env.register_contract(None, MockIln);
     let admin = Address::generate(&env);
     let non_admin = Address::generate(&env);
 
-    let contract_id = env.register(GovContract, ());
+    let contract_id = env.register_contract(None, GovContract);
     let contract = GovContractClient::new(&env, &contract_id);
 
     // Initialize using mock_all_auths scoped to setup only.
@@ -882,7 +882,7 @@ fn test_veto_emits_proposal_vetoed_event() {
     let id = create_fee_proposal(&t);
     t.contract.veto_proposal(&id, &reason_hash(&t.env));
 
-    let events = t.env.events().all().filter_by_contract(&t.contract.address);
+    let events = t.env.events().all();
     assert!(!events.events().is_empty(), "ProposalVetoed event should be emitted");
 }
 
@@ -1047,7 +1047,7 @@ fn test_create_proposal_emits_proposal_created_event() {
         &dummy_hash(&t.env),
         &100_i128,
     );
-    let events = t.env.events().all().filter_by_contract(&t.contract.address);
+    let events = t.env.events().all();
     assert!(
         !events.events().is_empty(),
         "ProposalCreated event should be emitted"
@@ -1120,7 +1120,7 @@ fn test_create_proposal_all_action_variants_accepted() {
 
     let actions: &[(ProposalAction, i128)] = &[
         (ProposalAction::UpdateFeeRate(100), 100),
-        (ProposalAction::AddToken(token_addr.clone()), 0),
+        (ProposalAction::AddToken(token_addr.clone(), 6_u32), 0),
         (ProposalAction::RemoveToken(token_addr.clone()), 0),
         (ProposalAction::UpdateMaxDiscountRate(50), 50),
     ];

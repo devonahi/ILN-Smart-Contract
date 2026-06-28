@@ -59,7 +59,7 @@ impl TestContext {
         xlm_admin_client.mint(&payer, &(DEFAULT_INVOICE_AMOUNT * 10));
         xlm_admin_client.mint(&lp, &(DEFAULT_INVOICE_AMOUNT * 10));
 
-        let contract_id = env.register(InvoiceLiquidityContract, ());
+        let contract_id = env.register_contract(None, InvoiceLiquidityContract);
         let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
         usdc_admin_client.mint(&contract.address, &(DEFAULT_INVOICE_AMOUNT * 100));
@@ -87,14 +87,8 @@ impl TestContext {
 
     pub fn submit_invoice(&self, amount: i128, rate: u32, due_days: u64) -> u64 {
         let due_date = self.env.ledger().timestamp() + due_days;
-        self.contract.submit_invoice(
-            &self.submitter,
-            &self.payer,
-            &amount,
-            &due_date,
-            &rate,
-            &self.usdc.address,
-        )
+        self.contract.submit_invoice(        &ReferralCode::None,
+    )
     }
 
     pub fn fund_invoice(&self, invoice_id: u64) {

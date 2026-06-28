@@ -62,7 +62,7 @@ fn setup() -> StressTestEnv {
     token.admin_client.mint(&payer, &total_amount);
     token.admin_client.mint(&lp, &total_amount);
 
-    let contract_id = env.register(InvoiceLiquidityContract, ());
+    let contract_id = env.register_contract(None, InvoiceLiquidityContract);
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
     // Need EURC and XLM token for initialization
@@ -101,14 +101,8 @@ fn test_stress_1000_invoice_lifecycles() {
     let submit_start = Instant::now();
     
     for i in 0..NUM_INVOICES {
-        let invoice_id = env.contract.submit_invoice(
-            &env.freelancer,
-            &env.payer,
-            &INVOICE_AMOUNT,
-            &due_date(&env),
-            &DISCOUNT_RATE,
-            &env.token.address,
-        );
+        let invoice_id = env.contract.submit_invoice(        &ReferralCode::None,
+    );
         invoice_ids.push_back(invoice_id);
     }
     
@@ -201,14 +195,8 @@ fn test_stress_1000_concurrent_submissions() {
     let mut invoice_ids: Vec<u64> = Vec::new(&env.env);
     
     for i in 0..NUM_INVOICES {
-        let invoice_id = env.contract.submit_invoice(
-            &env.freelancer,
-            &env.payer,
-            &INVOICE_AMOUNT,
-            &due_date(&env),
-            &DISCOUNT_RATE,
-            &env.token.address,
-        );
+        let invoice_id = env.contract.submit_invoice(        &ReferralCode::None,
+    );
         invoice_ids.push_back(invoice_id);
     }
     
@@ -242,14 +230,8 @@ fn test_stress_1000_partial_fundings() {
     // Submit invoices
     let mut invoice_ids: Vec<u64> = Vec::new(&env.env);
     for _ in 0..NUM_INVOICES {
-        let invoice_id = env.contract.submit_invoice(
-            &env.freelancer,
-            &env.payer,
-            &INVOICE_AMOUNT,
-            &due_date(&env),
-            &DISCOUNT_RATE,
-            &env.token.address,
-        );
+        let invoice_id = env.contract.submit_invoice(        &ReferralCode::None,
+    );
         invoice_ids.push_back(invoice_id);
     }
     

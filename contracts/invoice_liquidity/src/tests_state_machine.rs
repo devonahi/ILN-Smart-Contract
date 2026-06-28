@@ -67,7 +67,7 @@ fn setup() -> TestEnv {
     token_admin.mint(&payer, &(INVOICE_AMOUNT * 10));
 
     // Deploy and initialize contract
-    let contract_id = env.register(InvoiceLiquidityContract, ());
+    let contract_id = env.register_contract(None, InvoiceLiquidityContract);
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
     token_admin.mint(&contract.address, &(1000000000 * 100));
 
@@ -93,13 +93,7 @@ fn setup() -> TestEnv {
 /// Helper: submit a standard invoice and return its ID
 fn submit_invoice(t: &TestEnv) -> u64 {
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    t.contract.submit_invoice(        &ReferralCode::None,
     )
 }
 

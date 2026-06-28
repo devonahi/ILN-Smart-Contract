@@ -55,7 +55,7 @@ fn setup_xlm_env() -> (
     let xlm_address = xlm_contract_id.address();
 
     // Deploy invoice liquidity contract
-    let contract_id = env.register(InvoiceLiquidityContract, ());
+    let contract_id = env.register_contract(None, InvoiceLiquidityContract);
     let client = InvoiceLiquidityContractClient::new(&env, &contract_id);
 
     // Initialize contract with USDC, EURC and XLM
@@ -93,7 +93,7 @@ fn test_submit_invoice_with_xlm_token() {
             &due_date,
             &discount_rate,
             &xlm_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     let invoice = client.get_invoice(&invoice_id);
@@ -121,7 +121,7 @@ fn test_fund_invoice_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     // Mint XLM to funder
@@ -163,7 +163,7 @@ fn test_mark_paid_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
@@ -207,7 +207,7 @@ fn test_partial_funding_with_xlm() {
             &due_date,
             &discount_rate,
             &xlm_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
@@ -242,7 +242,7 @@ fn test_xlm_volume_tracking() {
             &due_date,
             &discount_rate,
             &xlm_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);
@@ -282,7 +282,7 @@ fn test_mixed_token_operations() {
             &due_date,
             &discount_rate,
             &usdc_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     usdc_admin.mint(&funder, &USDC_INVOICE_AMOUNT);
@@ -298,7 +298,7 @@ fn test_mixed_token_operations() {
             &due_date,
             &discount_rate,
             &xlm_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     xlm_admin.mint(&funder, &XLM_INVOICE_AMOUNT);
@@ -330,7 +330,7 @@ fn test_xlm_precision_in_calculations() {
             &due_date,
             &discount_rate,
             &xlm_address,
-            &Option::<soroban_sdk::BytesN<32>>::None,
+            &ReferralCode::None,
         );
 
     let xlm_token = TokenClient::new(&env, &xlm_address);

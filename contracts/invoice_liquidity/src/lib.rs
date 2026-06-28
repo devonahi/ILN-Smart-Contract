@@ -16,7 +16,6 @@ pub mod rate_logic;
 pub mod storage;
 pub mod top_payers;
 use access::*;
-use soroban_sdk::BytesN;
 pub mod constants;
 pub mod oracle_interface;
 #[cfg(test)]
@@ -27,15 +26,15 @@ mod tests_pagination;
 mod tests_regression;
 mod tests_xlm_support;
 #[cfg(test)]
-mod tests_error_cases;
+
 #[cfg(test)]
 mod tests_stress;
 #[cfg(test)]
 mod tests_lifecycle_integration;
 
 pub use crate::invoice::{
-    AppealRecord, Invoice, InvoiceParams, InvoiceStatus, LpFundRequest, ReputationProfile,
-    ReputationScore, TopPayerEntry,
+    AppealRecord, Invoice, InvoiceParams, InvoiceStatus, LpFundRequest, ReferralCode,
+    ReputationProfile, ReputationScore, TopPayerEntry,
 };
 pub use crate::storage::DataKey;
 pub use config::{Config, ConfigError};
@@ -50,7 +49,7 @@ use events::{
     AdminChanged, AppealResolved, ContractPaused, ContractUnpaused, ContractUpgraded,
     DefaultAppealed, DisputeResolved, FundQueueResolved, FundRequested, InvoiceCancelled,
     InvoiceDefaulted, InvoiceDisputed, InvoiceExpired, InvoiceFunded, InvoicePaid, InvoicePartiallyPaid,
-    InvoiceSubmitted, InvoiceTokenChanged, InvoiceTransferred, InvoiceUpdated, ParameterUpdated, TokenAdded,
+    InvoiceSubmitted, InvoiceTokenChanged, InvoiceTransferred, InvoiceUpdated, LPPositionTransferred, ParameterUpdated, TokenAdded,
     TokenRemoved,
 };
 use invoice::{
@@ -174,7 +173,7 @@ impl InvoiceLiquidityContract {
             &true,
         );
         env.storage().persistent().set(
-            &crate::storage::DataKey::TokenDecimals(token.clone()),
+            &crate::storage::DataKey::TokenDecimals(usdc_token.clone()),
             &6_u32,
         );
 
@@ -214,11 +213,14 @@ impl InvoiceLiquidityContract {
         require_admin(&env)?;
         let old_admin: Address = env.storage().instance().get(&StorageKey::Admin).unwrap();
         env.storage().instance().set(&StorageKey::Admin, &new_admin);
-        env.events().publish_event(&AdminChanged {
-            old_admin,
-            new_admin,
-            timestamp: env.ledger().timestamp(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "admin_changed"),),
+            AdminChanged {
+                old_admin,
+                new_admin,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
 
@@ -233,12 +235,16 @@ impl InvoiceLiquidityContract {
             .unwrap_or(0);
         env.storage().instance().set(&StorageKey::FeeRate, &rate);
         let updated_by = get_admin(&env).ok_or(ContractError::Unauthorized)?;
-        env.events().publish_event(&ParameterUpdated {
-            param_name: Symbol::new(&env, "protocol_fee_rate_bps"),
-            old_value: old_rate as i128,
-            new_value: rate as i128,
-            updated_by,
-        });
+        let pn = Symbol::new(&env, "protocol_fee_rate_bps");
+        env.events().publish(
+            (Symbol::new(&env, "parameter_updated"), pn, updated_by.clone()),
+            ParameterUpdated {
+                param_name: pn,
+                old_value: old_rate as i128,
+                new_value: rate as i128,
+                updated_by,
+            },
+        );
         Ok(())
     }
 
@@ -255,12 +261,16 @@ impl InvoiceLiquidityContract {
             .instance()
             .set(&StorageKey::MaxDiscountRate, &rate);
         let updated_by = get_admin(&env).ok_or(ContractError::Unauthorized)?;
-        env.events().publish_event(&ParameterUpdated {
-            param_name: Symbol::new(&env, "max_discount_rate_bps"),
-            old_value: old_rate as i128,
-            new_value: rate as i128,
-            updated_by,
-        });
+        let pn = Symbol::new(&env, "max_discount_rate_bps");
+        env.events().publish(
+            (Symbol::new(&env, "parameter_updated"), pn, updated_by.clone()),
+            ParameterUpdated {
+                param_name: pn,
+                old_value: old_rate as i128,
+                new_value: rate as i128,
+                updated_by,
+            },
+        );
         Ok(())
     }
 
@@ -314,10 +324,6 @@ impl InvoiceLiquidityContract {
 
     /// Access: Admin only
     pub fn add_token(env: Env, token: Address, decimals: u32) -> Result<(), ContractError> {
-    ///
-    /// Reject tokens that implement fee-on-transfer behavior by ensuring a small
-    /// token transfer to the contract results in the same amount being received.
-    pub fn add_token(env: Env, token: Address) -> Result<(), ContractError> {
         require_admin(&env)?;
 
         let token_client = token_client(&env, &token);
@@ -368,7 +374,10 @@ impl InvoiceLiquidityContract {
                 .set(&crate::storage::DataKey::TokenList, &list);
         }
 
-        env.events().publish_event(&TokenAdded { token, decimals });
+        env.events().publish(
+            (Symbol::new(&env, "token_added"), token.clone()),
+            TokenAdded { token, decimals },
+        );
         Ok(())
     }
 
@@ -396,7 +405,10 @@ impl InvoiceLiquidityContract {
             .persistent()
             .set(&crate::storage::DataKey::TokenList, &pruned);
 
-        env.events().publish_event(&TokenRemoved { token });
+        env.events().publish(
+            (Symbol::new(&env, "token_removed"), token.clone()),
+            TokenRemoved { token },
+        );
         Ok(())
     }
 
@@ -422,9 +434,12 @@ impl InvoiceLiquidityContract {
         require_admin(&env)?;
 
         set_paused(&env, true);
-        env.events().publish_event(&ContractPaused {
-            timestamp: env.ledger().timestamp(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "paused"),),
+            ContractPaused {
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
 
@@ -433,9 +448,12 @@ impl InvoiceLiquidityContract {
         require_admin(&env)?;
 
         set_paused(&env, false);
-        env.events().publish_event(&ContractUnpaused {
-            timestamp: env.ledger().timestamp(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "unpaused"),),
+            ContractUnpaused {
+                timestamp: env.ledger().timestamp(),
+            },
+        );
         Ok(())
     }
 
@@ -469,11 +487,14 @@ impl InvoiceLiquidityContract {
 
         let admin = get_admin(&env).ok_or(ContractError::Unauthorized)?;
 
-        env.events().publish_event(&ContractUpgraded {
-            admin,
-            new_wasm_hash,
-            timestamp: env.ledger().timestamp(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "upgraded"), admin.clone()),
+            ContractUpgraded {
+                admin,
+                new_wasm_hash,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -555,7 +576,7 @@ impl InvoiceLiquidityContract {
         due_date: u64,
         discount_rate: u32,
         token: Address,
-        referral_code: Option<BytesN<32>>,
+        referral_code: ReferralCode,
     ) -> Result<u64, ContractError> {
         if is_paused(&env) {
             return Err(ContractError::ContractPaused);
@@ -582,7 +603,6 @@ impl InvoiceLiquidityContract {
         // know the token is on the allowlist (and therefore has decimals stored).
         validate_invoice_terms_with_token(&env, amount, due_date, discount_rate, &token)?;
 
-        let id = next_invoice_id(&env);
         let id = next_invoice_id(&env)?;
 
         // Capture the freelancer's reputation score at submission time
@@ -616,21 +636,24 @@ impl InvoiceLiquidityContract {
         // Increment detailed reputation invoices_submitted count
         increment_invoices_submitted(&env, &freelancer);
 
-        env.events().publish_event(&InvoiceSubmitted {
-            invoice_id: invoice.id,
-            freelancer: invoice.freelancer.clone(),
-            payer: invoice.payer.clone(),
-            token: invoice.token.clone(),
-            amount: invoice.amount,
-            due_date: u64::from(invoice.due_date),
-            discount_rate: invoice.discount_rate,
-            referral_code: referral_code.clone(),
-            status: invoice.status.clone(),
-            timestamp: env.ledger().timestamp(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "submitted"), invoice.id, invoice.freelancer.clone(), invoice.payer.clone()),
+            InvoiceSubmitted {
+                invoice_id: invoice.id,
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                amount: invoice.amount,
+                due_date: u64::from(invoice.due_date),
+                discount_rate: invoice.discount_rate,
+                referral_code: referral_code.clone(),
+                status: invoice.status.clone(),
+                timestamp: env.ledger().timestamp(),
+            },
+        );
 
         // Track referral count if provided
-        if let Some(code) = referral_code {
+        if let ReferralCode::Present(code) = &referral_code {
             let key = crate::storage::DataKey::ReferralCount(code.clone());
             let current: u64 = env
                 .storage()
@@ -695,16 +718,19 @@ impl InvoiceLiquidityContract {
 
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&InvoiceUpdated {
-            invoice_id: invoice.id,
-            freelancer: invoice.freelancer.clone(),
-            payer: invoice.payer.clone(),
-            token: invoice.token.clone(),
-            amount: invoice.amount,
-            due_date: u64::from(invoice.due_date),
-            discount_rate: invoice.discount_rate,
-            status: invoice.status.clone(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "updated"), invoice.id, invoice.freelancer.clone(), invoice.payer.clone()),
+            InvoiceUpdated {
+                invoice_id: invoice.id,
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                amount: invoice.amount,
+                due_date: u64::from(invoice.due_date),
+                discount_rate: invoice.discount_rate,
+                status: invoice.status.clone(),
+            },
+        );
 
         Ok(())
     }
@@ -758,11 +784,14 @@ impl InvoiceLiquidityContract {
 
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&InvoiceTokenChanged {
-            invoice_id,
-            old_token,
-            new_token,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "token_changed"), invoice_id),
+            InvoiceTokenChanged {
+                invoice_id,
+                old_token,
+                new_token,
+            },
+        );
 
         Ok(())
     }
@@ -806,7 +835,6 @@ impl InvoiceLiquidityContract {
                 &params.token,
             )?;
 
-            let id = next_invoice_id(&env);
             let id = next_invoice_id(&env)?;
 
             // Capture the freelancer's reputation score at submission time
@@ -835,23 +863,24 @@ impl InvoiceLiquidityContract {
             add_invoice_to_submitter(&env, &params.freelancer, id);
 
             // Increment total invoices counter
-            increment_total_invoices(&env);
-
-            env.events().publish_event(&InvoiceSubmitted {
-                invoice_id: invoice.id,
-                freelancer: invoice.freelancer.clone(),
-                payer: invoice.payer.clone(),
-                token: invoice.token.clone(),
-                amount: invoice.amount,
-                due_date: u64::from(invoice.due_date),
-                discount_rate: invoice.discount_rate,
-                referral_code: params.referral_code.clone(),
-                status: invoice.status.clone(),
-                timestamp: env.ledger().timestamp(),
-            });
+            increment_total_invoices(&env);                env.events().publish(
+                    (Symbol::new(&env, "submitted"), invoice.id, invoice.freelancer.clone(), invoice.payer.clone()),
+                    InvoiceSubmitted {
+                    invoice_id: invoice.id,
+                    freelancer: invoice.freelancer.clone(),
+                    payer: invoice.payer.clone(),
+                    token: invoice.token.clone(),
+                    amount: invoice.amount,
+                    due_date: u64::from(invoice.due_date),
+                    discount_rate: invoice.discount_rate,
+                    referral_code: params.referral_code.clone(),
+                    status: invoice.status.clone(),
+                    timestamp: env.ledger().timestamp(),
+                },
+            );
 
             // Track referral count if provided
-            if let Some(code) = params.referral_code {
+            if let ReferralCode::Present(code) = &params.referral_code {
                 let key = crate::storage::DataKey::ReferralCount(code.clone());
                 let current: u64 = env
                     .storage()
@@ -932,11 +961,14 @@ impl InvoiceLiquidityContract {
         });
         save_fund_queue(&env, invoice_id, &queue);
 
-        env.events().publish_event(&FundRequested {
-            invoice_id,
-            lp,
-            score,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "fund_requested"), invoice_id, lp.clone()),
+            FundRequested {
+                invoice_id,
+                lp,
+                score,
+            },
+        );
 
         Ok(())
     }
@@ -974,11 +1006,14 @@ impl InvoiceLiquidityContract {
 
         save_queue_resolution(&env, invoice_id, &best_lp);
 
-        env.events().publish_event(&FundQueueResolved {
-            invoice_id,
-            approved_lp: best_lp.clone(),
-            score: best_score,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "fund_queue_resolved"), invoice_id, best_lp.clone()),
+            FundQueueResolved {
+                invoice_id,
+                approved_lp: best_lp.clone(),
+                score: best_score,
+            },
+        );
 
         Ok(best_lp)
     }
@@ -1071,11 +1106,14 @@ impl InvoiceLiquidityContract {
         {
             invoice.status = InvoiceStatus::Expired;
             save_invoice(&env, &invoice);
-            env.events().publish_event(&InvoiceExpired {
-                invoice_id: invoice.id,
-                freelancer: invoice.freelancer.clone(),
-                status: invoice.status.clone(),
-            });
+            env.events().publish(
+                (Symbol::new(&env, "expired"), invoice.id),
+                InvoiceExpired {
+                    invoice_id: invoice.id,
+                    freelancer: invoice.freelancer.clone(),
+                    status: invoice.status.clone(),
+                },
+            );
             return Err(ContractError::InvoiceExpired);
         }
 
@@ -1182,25 +1220,28 @@ impl InvoiceLiquidityContract {
 
         let effective_yield_bps = ((invoice.discount_rate as u64 * days_to_due) / 365) as u32;
 
-        env.events().publish_event(&InvoiceFunded {
-            invoice_id: invoice.id,
-            funder: funder.clone(),
-            freelancer: invoice.freelancer.clone(),
-            payer: invoice.payer.clone(),
-            token: invoice.token.clone(),
-            fund_amount,
-            amount_funded: invoice.amount_funded,
-            invoice_amount: invoice.amount,
-            due_date: u64::from(invoice.due_date),
-            discount_rate: invoice.discount_rate,
-            funded_at: invoice.funded_at.map(|ts| ts.into()),
-            status: invoice.status.clone(),
+        env.events().publish(
+            (Symbol::new(&env, "funded"), invoice.id, funder.clone()),
+            InvoiceFunded {
+                invoice_id: invoice.id,
+                funder: funder.clone(),
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                fund_amount,
+                amount_funded: invoice.amount_funded,
+                invoice_amount: invoice.amount,
+                due_date: u64::from(invoice.due_date),
+                discount_rate: invoice.discount_rate,
+                funded_at: invoice.funded_at.map(|ts| ts.into()),
+                status: invoice.status.clone(),
 
-            // NEW
-            lp: funder.clone(),
-            effective_yield_bps,
-            timestamp: now,
-        });
+                // NEW
+                lp: funder.clone(),
+                effective_yield_bps,
+                timestamp: now,
+            },
+        );
 
         Ok(())
     }
@@ -1248,12 +1289,15 @@ impl InvoiceLiquidityContract {
         remove_invoice_from_submitter(&env, &old_freelancer, invoice_id);
         add_invoice_to_submitter(&env, &new_freelancer, invoice_id);
 
-        env.events().publish_event(&InvoiceTransferred {
-            invoice_id,
-            old_freelancer,
-            new_freelancer,
-            status: invoice.status.clone(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "transferred"), invoice_id),
+            InvoiceTransferred {
+                invoice_id,
+                old_freelancer,
+                new_freelancer,
+                status: invoice.status.clone(),
+            },
+        );
 
         Ok(())
     }
@@ -1314,12 +1358,15 @@ impl InvoiceLiquidityContract {
         remove_invoice_from_lp(&env, &current_lp, invoice_id);
         add_invoice_to_lp(&env, &new_lp, invoice_id);
 
-        env.events().publish_event(&LPPositionTransferred {
-            invoice_id,
-            old_lp: current_lp,
-            new_lp,
-            status: invoice.status.clone(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "lp_position_transferred"), invoice_id),
+            LPPositionTransferred {
+                invoice_id,
+                old_lp: current_lp,
+                new_lp,
+                status: invoice.status.clone(),
+            },
+        );
 
         Ok(())
     }
@@ -1370,11 +1417,14 @@ impl InvoiceLiquidityContract {
 
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&InvoiceCancelled {
-            invoice_id,
-            freelancer: invoice.freelancer.clone(),
-            status: invoice.status.clone(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "cancelled"), invoice_id),
+            InvoiceCancelled {
+                invoice_id,
+                freelancer: invoice.freelancer.clone(),
+                status: invoice.status.clone(),
+            },
+        );
 
         Ok(())
     }
@@ -1397,12 +1447,14 @@ impl InvoiceLiquidityContract {
         match invoice.status {
             InvoiceStatus::Pending => {
                 invoice.status = InvoiceStatus::Expired;
-                save_invoice(&env, &invoice);
-                env.events().publish_event(&InvoiceExpired {
-                    invoice_id: invoice.id,
-                    freelancer: invoice.freelancer.clone(),
-                    status: invoice.status.clone(),
-                });
+                save_invoice(&env, &invoice);                    env.events().publish(
+                        (Symbol::new(&env, "expired"), invoice.id),
+                        InvoiceExpired {
+                        invoice_id: invoice.id,
+                        freelancer: invoice.freelancer.clone(),
+                        status: invoice.status.clone(),
+                    },
+                );
                 Ok(())
             }
             InvoiceStatus::PartiallyFunded | InvoiceStatus::Funded => {
@@ -1479,13 +1531,16 @@ impl InvoiceLiquidityContract {
         // If not fully paid, save and emit partial event
         if invoice.amount_paid < invoice.amount {
             save_invoice(&env, &invoice);
-            env.events().publish_event(&InvoicePartiallyPaid {
-                invoice_id: invoice.id,
-                payer: invoice.payer.clone(),
-                amount_paid_now: amount,
-                total_amount_paid: invoice.amount_paid,
-                remaining_amount: invoice.amount - invoice.amount_paid,
-            });
+            env.events().publish(
+                (Symbol::new(&env, "partially_paid"), invoice.id, invoice.payer.clone()),
+                InvoicePartiallyPaid {
+                    invoice_id: invoice.id,
+                    payer: invoice.payer.clone(),
+                    amount_paid_now: amount,
+                    total_amount_paid: invoice.amount_paid,
+                    remaining_amount: invoice.amount - invoice.amount_paid,
+                },
+            );
             return Ok(());
         }
 
@@ -1553,19 +1608,22 @@ impl InvoiceLiquidityContract {
         increment_invoices_paid(&env, &invoice.payer);
         increment_invoices_paid(&env, &invoice.freelancer);
 
-        env.events().publish_event(&InvoicePaid {
-            invoice_id: invoice.id,
-            payer: invoice.payer.clone(),
-            lp: primary_lp,
-            freelancer: invoice.freelancer.clone(),
-            token: invoice.token.clone(),
-            amount_paid: invoice.amount,
-            lp_earned,
-            lp_payout: primary_lp_payout,
-            settlement_timestamp: env.ledger().timestamp(),
-            paid_on_time,
-            status: invoice.status.clone(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "paid"), invoice.id, invoice.payer.clone(), primary_lp.clone()),
+            InvoicePaid {
+                invoice_id: invoice.id,
+                payer: invoice.payer.clone(),
+                lp: primary_lp,
+                freelancer: invoice.freelancer.clone(),
+                token: invoice.token.clone(),
+                amount_paid: invoice.amount,
+                lp_earned,
+                lp_payout: primary_lp_payout,
+                settlement_timestamp: env.ledger().timestamp(),
+                paid_on_time,
+                status: invoice.status.clone(),
+            },
+        );
 
         Ok(())
     }
@@ -1690,18 +1748,21 @@ impl InvoiceLiquidityContract {
         // Increment detailed reputation invoices_defaulted count for the payer
         increment_invoices_defaulted(&env, &invoice.payer);
 
-        env.events().publish_event(&InvoiceDefaulted {
-            invoice_id: invoice.id,
-            funder,
-            freelancer: invoice.freelancer.clone(),
-            payer: invoice.payer.clone(),
-            token: invoice.token.clone(),
-            amount: invoice.amount,
-            due_date: u64::from(invoice.due_date),
-            defaulted_at: now,
-            discount_amount: total_refunded,
-            status: invoice.status.clone(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "defaulted"), invoice.id, funder.clone()),
+            InvoiceDefaulted {
+                invoice_id: invoice.id,
+                funder,
+                freelancer: invoice.freelancer.clone(),
+                payer: invoice.payer.clone(),
+                token: invoice.token.clone(),
+                amount: invoice.amount,
+                due_date: u64::from(invoice.due_date),
+                defaulted_at: now,
+                discount_amount: total_refunded,
+                status: invoice.status.clone(),
+            },
+        );
 
         Ok(())
     }
@@ -1774,12 +1835,15 @@ impl InvoiceLiquidityContract {
         invoice.status = InvoiceStatus::Appealed;
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&DefaultAppealed {
-            invoice_id,
-            payer: invoice.payer.clone(),
-            evidence_hash,
-            appealed_at: now,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "default_appealed"), invoice_id, invoice.payer.clone()),
+            DefaultAppealed {
+                invoice_id,
+                payer: invoice.payer.clone(),
+                evidence_hash,
+                appealed_at: now,
+            },
+        );
 
         Ok(())
     }
@@ -1825,12 +1889,15 @@ impl InvoiceLiquidityContract {
 
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&AppealResolved {
-            invoice_id,
-            payer: invoice.payer.clone(),
-            upheld,
-            resolved_at: now,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "appeal_resolved"), invoice_id, invoice.payer.clone()),
+            AppealResolved {
+                invoice_id,
+                payer: invoice.payer.clone(),
+                upheld,
+                resolved_at: now,
+            },
+        );
 
         Ok(())
     }
@@ -1893,12 +1960,15 @@ impl InvoiceLiquidityContract {
         invoice.status = InvoiceStatus::Disputed;
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&InvoiceDisputed {
-            invoice_id,
-            payer: invoice.payer.clone(),
-            reason_hash,
-            disputed_at: now_ts,
-        });
+        env.events().publish(
+            (Symbol::new(&env, "disputed"), invoice_id, invoice.payer.clone()),
+            InvoiceDisputed {
+                invoice_id,
+                payer: invoice.payer.clone(),
+                reason_hash,
+                disputed_at: now_ts,
+            },
+        );
 
         Ok(())
     }
@@ -1962,12 +2032,15 @@ impl InvoiceLiquidityContract {
 
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&DisputeResolved {
-            invoice_id,
-            resolution_hash,
-            resolution,
-            resolved_at: env.ledger().timestamp(),
-        });
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved"), invoice_id, resolution_hash.clone()),
+            DisputeResolved {
+                invoice_id,
+                resolution_hash,
+                resolution,
+                resolved_at: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -2007,12 +2080,16 @@ impl InvoiceLiquidityContract {
 
         save_invoice(&env, &invoice);
 
-        env.events().publish_event(&DisputeResolved {
-            invoice_id,
-            resolution_hash: BytesN::from_array(&env, &[0u8; 32]),
-            resolution: 2, // Rejected
-            resolved_at: env.ledger().timestamp(),
-        });
+        let empty_hash = BytesN::from_array(&env, &[0u8; 32]);
+        env.events().publish(
+            (Symbol::new(&env, "dispute_resolved"), invoice_id, empty_hash.clone()),
+            DisputeResolved {
+                invoice_id,
+                resolution_hash: empty_hash,
+                resolution: 2, // Rejected
+                resolved_at: env.ledger().timestamp(),
+            },
+        );
 
         Ok(())
     }
@@ -2105,12 +2182,16 @@ impl InvoiceLiquidityContract {
         let updated_by = get_admin(&env).ok_or(ContractError::Unauthorized)?;
         let old_value = get_min_payer_reputation(&env);
         set_min_payer_reputation(&env, value);
-        env.events().publish_event(&ParameterUpdated {
-            param_name: Symbol::new(&env, "min_payer_reputation"),
-            old_value: old_value as i128,
-            new_value: value as i128,
-            updated_by,
-        });
+        let pn = Symbol::new(&env, "min_payer_reputation");
+        env.events().publish(
+            (Symbol::new(&env, "parameter_updated"), pn, updated_by.clone()),
+            ParameterUpdated {
+                param_name: pn,
+                old_value: old_value as i128,
+                new_value: value as i128,
+                updated_by,
+            },
+        );
         Ok(())
     }
 

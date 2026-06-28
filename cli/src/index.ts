@@ -9,6 +9,8 @@ import { Command } from "commander";
 import { makeConfigCommand } from "./commands/config.js";
 import { makeExportCommand } from "./commands/export.js";
 import { makeWalletCommand } from "./commands/wallet.js";
+import { makeReputationCommand } from "./commands/reputation.js";
+import { makeCompletionCommand } from "./commands/completion.js";
 
 const program = new Command();
 
@@ -21,5 +23,7 @@ program
 program.addCommand(makeConfigCommand());
 program.addCommand(makeExportCommand());
 program.addCommand(makeWalletCommand());
+program.addCommand(makeReputationCommand());
+program.addCommand(makeCompletionCommand());
 
 program.parse(process.argv);

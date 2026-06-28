@@ -17,7 +17,7 @@ fn test_submit_invoice_without_referral_does_not_increment_stats() {
         &due_date,
         &DISCOUNT_RATE,
         &t.token.address,
-        &Option::<BytesN<32>>::None,
+        &ReferralCode::None,
     );
 
     // stats for arbitrary code should be zero

@@ -57,7 +57,7 @@ fn setup_queue() -> QueueTestEnv {
     }
     token_admin.mint(&payer, &(INVOICE_AMOUNT * 10));
 
-    let contract_id = env.register(InvoiceLiquidityContract, ());
+    let contract_id = env.register_contract(None, InvoiceLiquidityContract);
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
     token_admin.mint(&contract.address, &(INVOICE_AMOUNT * 100));
 
@@ -86,13 +86,7 @@ fn setup_queue() -> QueueTestEnv {
 
 fn submit_invoice(t: &QueueTestEnv) -> u64 {
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    t.contract.submit_invoice(        &ReferralCode::None,
     )
 }
 

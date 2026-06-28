@@ -42,7 +42,7 @@ fn setup() -> TestEnv {
     let freelancer = Address::generate(&env);
     let payer = Address::generate(&env);
 
-    let contract_id = env.register(InvoiceLiquidityContract, ());
+    let contract_id = env.register_contract(None, InvoiceLiquidityContract);
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
     
     let xlm_admin = Address::generate(&env);
@@ -71,13 +71,7 @@ fn test_convert_invoice_token_success() {
     let t = setup();
 
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     // Switch from USDC to EURC
@@ -92,13 +86,7 @@ fn test_convert_invoice_token_non_submitter_fails() {
     let t = setup();
 
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     let someone_else = Address::generate(&t.env);
@@ -113,13 +101,7 @@ fn test_convert_invoice_token_non_allowlisted_fails() {
     let t = setup();
 
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     let result = t.contract.try_convert_invoice_token(&t.freelancer, &invoice_id, &t.non_allowlisted_token.address);
@@ -133,13 +115,7 @@ fn test_convert_invoice_token_after_funding_fails() {
     let t = setup();
 
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     // Fund it
@@ -161,13 +137,7 @@ fn test_convert_invoice_token_after_expiry_fails() {
     let t = setup();
 
     let due_date = t.env.ledger().timestamp() + DUE_DATE_OFFSET;
-    let invoice_id = t.contract.submit_invoice(
-        &t.freelancer,
-        &t.payer,
-        &INVOICE_AMOUNT,
-        &due_date,
-        &DISCOUNT_RATE,
-        &t.token.address,
+    let invoice_id = t.contract.submit_invoice(        &ReferralCode::None,
     );
 
     // Advance time past due date

@@ -62,7 +62,7 @@ fn setup() -> LifecycleTestEnv {
     xlm.admin_client.mint(&payer, &(INVOICE_AMOUNT * 100));
     xlm.admin_client.mint(&lp, &(INVOICE_AMOUNT * 100));
 
-    let contract_id = env.register(InvoiceLiquidityContract, ());
+    let contract_id = env.register_contract(None, InvoiceLiquidityContract);
     let contract = InvoiceLiquidityContractClient::new(&env, &contract_id);
     let eurc_address = Address::generate(&env);
     contract.initialize(&admin, &token.address, &eurc_address, &xlm.address);
@@ -104,13 +104,7 @@ fn test_lifecycle_usdc_full() {
     let stats_initial = env.contract.get_contract_stats();
     
     // Step 1: Submit invoice
-    let invoice_id = env.contract.submit_invoice(
-        &env.freelancer,
-        &env.payer,
-        &INVOICE_AMOUNT,
-        &due_date(&env),
-        &DISCOUNT_RATE,
-        &env.token.address,
+    let invoice_id = env.contract.submit_invoice(        &ReferralCode::None,
     );
     
     // Verify Pending state
@@ -206,13 +200,7 @@ fn test_lifecycle_eurc_full() {
     let stats_initial = env.contract.get_contract_stats();
     
     // Step 1: Submit invoice with EURC
-    let invoice_id = env.contract.submit_invoice(
-        &env.freelancer,
-        &env.payer,
-        &INVOICE_AMOUNT,
-        &due_date(&env),
-        &DISCOUNT_RATE,
-        &eurc.address,
+    let invoice_id = env.contract.submit_invoice(        &ReferralCode::None,
     );
     
     // Verify Pending state
@@ -280,13 +268,7 @@ fn test_lifecycle_xlm_full() {
     let stats_initial = env.contract.get_contract_stats();
     
     // Step 1: Submit invoice with XLM
-    let invoice_id = env.contract.submit_invoice(
-        &env.freelancer,
-        &env.payer,
-        &INVOICE_AMOUNT,
-        &due_date(&env),
-        &DISCOUNT_RATE,
-        &env.xlm.address,
+    let invoice_id = env.contract.submit_invoice(        &ReferralCode::None,
     );
     
     // Verify Pending state
@@ -349,13 +331,7 @@ fn test_lifecycle_stat_counters_increment() {
     let stats_initial = env.contract.get_contract_stats();
     
     // Submit invoice
-    let invoice_id = env.contract.submit_invoice(
-        &env.freelancer,
-        &env.payer,
-        &INVOICE_AMOUNT,
-        &due_date(&env),
-        &DISCOUNT_RATE,
-        &env.token.address,
+    let invoice_id = env.contract.submit_invoice(        &ReferralCode::None,
     );
     
     // Verify total_invoices incremented

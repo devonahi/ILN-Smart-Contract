@@ -101,7 +101,7 @@ fn test_governance_setters_and_access_control() {
     let admin = Address::generate(&env);
     let non_admin = Address::generate(&env);
 
-    let contract_id = env.register(ReputationBonusContract, ());
+    let contract_id = env.register_contract(None, ReputationBonusContract);
     let client = ReputationBonusContractClient::new(&env, &contract_id);
 
     client.init(&admin);
@@ -120,7 +120,7 @@ fn test_governance_setters_and_access_control() {
     let update_res_admin = client.try_update_config(&admin, &90, &300, &150);
     assert!(update_res_admin.is_ok());
 
-    let events = env.events().all().filter_by_contract(&client.address);
+    let events = env.events().all();
     let expected = [
         ParameterUpdated {
             param_name: Symbol::new(&env, "high_rep_threshold"),
@@ -169,7 +169,7 @@ fn test_submit_invoice_flow() {
 
     let admin = Address::generate(&env);
 
-    let contract_id = env.register(ReputationBonusContract, ());
+    let contract_id = env.register_contract(None, ReputationBonusContract);
     let client = ReputationBonusContractClient::new(&env, &contract_id);
 
     client.init(&admin);
